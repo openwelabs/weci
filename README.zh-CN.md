@@ -75,7 +75,7 @@ Agent 模式下，前端会在 AI 消息正文上方显示简洁的工具调用�
 ### 方式一：从源码安装（推荐）
 
 ```bash
-git clone https://github.com/your-name/weci.git
+git clone https://github.com/openwelabs/weci.git
 cd weci
 
 python3 -m venv .venv

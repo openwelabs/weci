@@ -76,7 +76,7 @@ In Agent mode the UI shows compact tool-call cards above the AI message with
 ### Option 1: Install from source (recommended)
 
 ```bash
-git clone https://github.com/your-name/weci.git
+git clone https://github.com/openwelabs/weci.git
 cd weci
 
 python3 -m venv .venv
