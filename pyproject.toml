@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "weci"
+version = "0.4.0"
+description = "WeCi — 本地优先的 AI 对话客户端 + Agent 工作台"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn>=0.30,<1.0",
+    "httpx>=0.27,<1.0",
+    "python-dotenv>=1.0,<2.0",
+    "pydantic>=2.0,<3.0",
+]
+
+[project.scripts]
+weci = "backend.cli:main"
+
+[tool.setuptools]
+packages = [
+    "backend",
+    "backend.api",
+    "backend.services",
+    "backend.tools",
+    "backend.plugins",
+    "backend.plugins.builtin",
+    "backend.plugins.builtin.calculator",
+    "backend.plugins.builtin.current_time",
+    "backend.plugins.builtin.web_search",
+    "backend.plugins.builtin.computer",
+    "sdk",
+]
+
+[tool.setuptools.package-data]
+backend = ["frontend/**/*"]
+"backend.plugins.builtin.calculator" = ["manifest.json"]
+"backend.plugins.builtin.current_time" = ["manifest.json"]
+"backend.plugins.builtin.web_search" = ["manifest.json"]
+"backend.plugins.builtin.computer" = ["manifest.json"]

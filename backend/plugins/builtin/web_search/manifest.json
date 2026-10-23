@@ -1,0 +1,10 @@
+{
+  "id": "web_search",
+  "name": "Web Search",
+  "version": "1.0.0",
+  "description": "联网搜索工具。未配置搜索 Provider 时返回“未配置”，绝不伪造结果。",
+  "author": "WeCi",
+  "api_version": "0.1",
+  "entry": "plugin.py",
+  "permissions": ["network"]
+}

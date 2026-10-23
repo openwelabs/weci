@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="WeCi — 简洁、开源、本地优先的 AI 对话客户端。">
+  <title>WeCi · 安静的 AI 对话</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='10' fill='%232f6f5e'/%3E%3Cpath d='M7 19c3 0 3-6 6-6s3 6 6 6 3-6 6-6' fill='none' stroke='%23f7f4ea' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+  <script>
+    // 在样式加载前应用主题，避免刷新时闪烁
+    (function () {
+      try {
+        var saved = localStorage.getItem('weci.theme');
+        var dark = saved === 'dark' || (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="vendor/katex.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 图标精灵：所有图标复用此处定义 -->
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M21.5 12h-2M4.5 12h-2M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4M18.7 18.7l-1.4-1.4M6.7 6.7L5.3 5.3"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M10 3h4v2a2 2 0 0 0 4 0V3h3a1 1 0 0 1 1 1v3h-2a2 2 0 0 0 0 4h2v3a1 1 0 0 1-1 1h-3v-2a2 2 0 0 0-4 0v2h-3a1 1 0 0 1-1-1v-3h2a2 2 0 0 0 0-4H9V4a1 1 0 0 1 1-1z"/></symbol></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16M9.9 5.9A9.5 9.5 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3.2 3.9M6.2 7.7A17 17 0 0 0 2.5 12S6 18.5 12 18.5a9.3 9.3 0 0 0 4.2-1"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-8 8H4l2.2-2.9A8 8 0 1 1 20 12z"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4L16.5 3.5z"/><path d="M14.5 5.5l3 3"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-panel-left" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></symbol>
+    <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2.5L4.5 13.5H11L10 21.5l8.5-11H12l1-8z"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  </svg>
+
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar" aria-label="对话历史">
+      <div class="sidebar__brand">
+        <a class="brand" href="#" id="brandLink" aria-label="WeCi 首页">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 14.5c2.6 0 2.6-6 5.3-6s2.6 6 5.3 6 2.6-6 5.4-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+          </span>
+          <span class="brand__name">WeCi</span>
+          <span class="brand__tag">v0.3</span>
+        </a>
+        <div class="sidebar__brand-actions">
+          <button class="icon-btn sidebar__collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" title="收起侧栏">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-panel-left"/></svg>
+          </button>
+          <button class="icon-btn sidebar__close" id="sidebarClose" type="button" aria-label="关闭侧栏">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <button class="new-chat" id="newChatBtn" type="button">
+        <svg class="icon" viewBox="0 0 24 24"><use href="#i-plus"/></svg>
+        <span>新建对话</span>
+        <kbd class="new-chat__kbd">Ctrl K</kbd>
+      </button>
+
+      <div class="sidebar__label">最近对话</div>
+      <nav class="history" id="historyList" aria-label="历史会话"></nav>
+
+      <div class="sidebar__footer">
+        <button class="side-action" id="settingsBtn" type="button">
+          <svg class="icon" viewBox="0 0 24 24"><use href="#i-settings"/></svg>
+          <span>设置</span>
+        </button>
+        <button class="side-action" id="themeBtn" type="button" aria-pressed="false">
+          <svg class="icon i-moon" viewBox="0 0 24 24"><use href="#i-moon"/></svg>
+          <svg class="icon i-sun" viewBox="0 0 24 24"><use href="#i-sun"/></svg>
+          <span id="themeBtnLabel">深色模式</span>
+        </button>
+        <p class="sidebar__note">对话仅保存在此浏览器</p>
+      </div>
+    </aside>
+
+    <div class="scrim" id="scrim" hidden></div>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn topbar__menu" id="menuBtn" type="button" aria-label="打开侧栏">
+          <svg class="icon" viewBox="0 0 24 24"><use href="#i-menu"/></svg>
+        </button>
+        <button class="icon-btn topbar__expand" id="sidebarExpand" type="button" aria-label="展开侧栏" title="展开侧栏">
+          <svg class="icon" viewBox="0 0 24 24"><use href="#i-panel-left"/></svg>
+        </button>
+        <div class="topbar__title" id="chatTitle">新对话</div>
+        <div class="mode-switch" id="modeSwitch" role="group" aria-label="对话模式">
+          <button type="button" class="mode-switch__btn is-active" data-mode="chat">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-chat"/></svg>
+            <span>Chat</span>
+          </button>
+          <button type="button" class="mode-switch__btn" data-mode="agent">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-zap"/></svg>
+            <span>Agent</span>
+          </button>
+        </div>
+        <div class="topbar__actions">
+          <div class="model-switch" id="modelSwitch">
+            <button class="model-chip" id="modelChip" type="button" title="点击快速切换模型" aria-haspopup="listbox" aria-expanded="false">
+              <span class="model-chip__dot" id="modelDot"></span>
+              <span id="modelChipText">未配置模型</span>
+              <svg class="icon model-chip__chevron" viewBox="0 0 24 24"><use href="#i-chevron-down"/></svg>
+            </button>
+            <div class="model-menu" id="modelMenu" role="listbox" aria-label="快速切换模型" hidden></div>
+          </div>
+          <button class="icon-btn" id="topThemeBtn" type="button" aria-label="切换深色 / 浅色主题">
+            <svg class="icon i-moon" viewBox="0 0 24 24"><use href="#i-moon"/></svg>
+            <svg class="icon i-sun" viewBox="0 0 24 24"><use href="#i-sun"/></svg>
+          </button>
+          <button class="icon-btn" id="topPluginsBtn" type="button" aria-label="插件管理" title="插件管理">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-puzzle"/></svg>
+          </button>
+          <button class="icon-btn" id="topSettingsBtn" type="button" aria-label="打开设置">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-settings"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="chat" id="chatScroll" aria-live="polite" aria-label="对话内容">
+        <div class="chat__inner">
+          <div class="empty" id="emptyState">
+            <div class="empty__orb" aria-hidden="true">
+              <span class="empty__ring"></span>
+              <span class="empty__ring empty__ring--2"></span>
+              <svg viewBox="0 0 24 24"><path d="M4 14.5c2.6 0 2.6-6 5.3-6s2.6 6 5.3 6 2.6-6 5.4-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+            </div>
+            <p class="empty__eyebrow">Open source · Local first</p>
+            <h1 class="empty__title">安静地，<em>和 AI 聊聊</em></h1>
+            <p class="empty__sub">WeCi 是一个轻量、透明的对话窗口。你的历史留在本地，模型由你决定。</p>
+            <div class="suggestions" id="suggestions">
+              <button type="button" data-prompt="用三句话解释什么是 Server-Sent Events（SSE），并说明它和 WebSocket 的区别。">
+                <span class="suggestions__kicker">解释概念</span>
+                <span class="suggestions__text">什么是 SSE？和 WebSocket 有什么区别</span>
+                <svg class="icon" viewBox="0 0 24 24"><use href="#i-arrow-up"/></svg>
+              </button>
+              <button type="button" data-prompt="用 Python 写一个快速排序，并用注释解释每一步，最后给出测试用例。">
+                <span class="suggestions__kicker">写点代码</span>
+                <span class="suggestions__text">用 Python 实现快速排序</span>
+                <svg class="icon" viewBox="0 0 24 24"><use href="#i-arrow-up"/></svg>
+              </button>
+              <button type="button" data-prompt="帮我把这个想法梳理成一份清晰的产品需求：一个本地优先的 AI 对话客户端，支持多模型与 Markdown 渲染。">
+                <span class="suggestions__kicker">整理思路</span>
+                <span class="suggestions__text">把模糊的想法整理成需求</span>
+                <svg class="icon" viewBox="0 0 24 24"><use href="#i-arrow-up"/></svg>
+              </button>
+              <button type="button" data-prompt="给我 8 个适合开源 AI 聊天工具的名字，要求简短、好记，并解释每个名字的含义。">
+                <span class="suggestions__kicker">来点灵感</span>
+                <span class="suggestions__text">为开源 AI 工具起 8 个名字</span>
+                <svg class="icon" viewBox="0 0 24 24"><use href="#i-arrow-up"/></svg>
+              </button>
+            </div>
+            <p class="empty__tip" id="configTip" hidden>
+              还没有配置 API Key，<button type="button" id="configTipBtn">打开设置</button> 连接你的模型服务。
+            </p>
+          </div>
+          <div class="messages" id="messages"></div>
+        </div>
+      </section>
+
+      <div class="composer-wrap">
+        <form class="composer" id="composerForm" autocomplete="off">
+          <label class="sr-only" for="input">发送给 WeCi 的消息</label>
+          <textarea id="input" rows="1" placeholder="给 WeCi 发消息…" enterkeyhint="send"></textarea>
+          <div class="composer__bar">
+            <span class="composer__hint" id="composerHint">Enter 发送 · Shift + Enter 换行</span>
+            <div class="composer__buttons">
+              <button class="send-btn" id="sendBtn" type="submit" aria-label="发送消息" disabled>
+                <svg class="icon" viewBox="0 0 24 24"><use href="#i-arrow-up"/></svg>
+              </button>
+              <button class="stop-btn" id="stopBtn" type="button" aria-label="停止生成" hidden>
+                <svg class="icon icon--solid" viewBox="0 0 24 24"><use href="#i-stop"/></svg>
+                <span>停止</span>
+              </button>
+            </div>
+          </div>
+        </form>
+        <p class="composer__footnote">WeCi 可能会出错，请核对重要信息。</p>
+      </div>
+
+      <section class="plugins-page" id="pluginsPage" hidden aria-label="插件管理">
+        <header class="plugins-page__head">
+          <button class="icon-btn plugins-page__back" id="pluginsBackBtn" type="button" aria-label="返回对话">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+          </button>
+          <div class="plugins-page__titles">
+            <h2 class="plugins-page__title">插件管理</h2>
+            <p class="plugins-page__sub">为 Agent 扩展工具能力</p>
+          </div>
+          <button class="ghost-btn plugins-page__refresh" id="pluginsRefreshBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>
+            <span>刷新</span>
+          </button>
+        </header>
+
+        <div class="plugins-page__body">
+          <div class="plugins__trust">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-alert"/></svg>
+            <p>安装插件即意味着信任其代码。Python 插件可在本机执行任意代码，WeCi 仅提供基础权限声明与运行时拦截，<strong>无法完全沙箱隔离</strong>。请勿安装来源不明的插件。</p>
+          </div>
+          <div class="plugins__toolbar">
+            <span class="plugins__hint">插件目录：<code>~/.weci/plugins/</code></span>
+          </div>
+          <div class="plugins__list" id="pluginsList">
+            <p class="plugins__empty">正在加载插件…</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal" id="settingsModal" hidden>
+    <div class="modal__scrim" data-close-settings></div>
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header class="modal__head">
+        <div>
+          <p class="modal__eyebrow">设置</p>
+          <h2 class="modal__title" id="settingsTitle">连接你的模型</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close-settings aria-label="关闭设置">
+          <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+        </button>
+      </header>
+
+      <form class="settings" id="settingsForm">
+        <section class="settings__section">
+          <h3 class="settings__heading">模型服务</h3>
+          <label class="field">
+            <span class="field__label">API Endpoint</span>
+            <input id="settingEndpoint" type="url" placeholder="https://api.openai.com/v1" spellcheck="false" autocapitalize="off">
+            <span class="field__hint">兼容 OpenAI 协议的地址，可填到 <code>/v1</code> 或完整的 <code>/v1/chat/completions</code>。</span>
+          </label>
+          <label class="field">
+            <span class="field__label">
+              API Key
+              <span class="badge" id="serverKeyBadge" hidden>服务端已配置</span>
+            </span>
+            <span class="field__row">
+              <input id="settingApiKey" type="password" placeholder="sk-…" spellcheck="false" autocapitalize="off">
+              <button class="ghost-btn" id="toggleKeyBtn" type="button" aria-label="显示或隐藏 API Key">显示</button>
+            </span>
+            <span class="field__hint">云端服务必填，Ollama / LM Studio 等本地服务可留空。密钥仅保存在此浏览器 localStorage，经本地后端转发，不会写入源码或仓库。</span>
+          </label>
+          <label class="field">
+            <span class="field__label">Model</span>
+            <input id="settingModel" type="text" list="modelPresets" placeholder="gpt-4o-mini" spellcheck="false" autocapitalize="off">
+            <datalist id="modelPresets">
+              <option value="gpt-4o-mini"></option>
+              <option value="gpt-4o"></option>
+              <option value="gpt-4.1-mini"></option>
+              <option value="deepseek-chat"></option>
+              <option value="qwen-plus"></option>
+              <option value="llama3.1"></option>
+            </datalist>
+          </label>
+          <div class="settings__test">
+            <button class="ghost-btn" id="testConnBtn" type="button">
+              <svg class="icon" viewBox="0 0 24 24"><use href="#i-zap"/></svg>
+              <span>测试连接</span>
+            </button>
+            <span class="settings__test-result" id="testConnResult" role="status"></span>
+          </div>
+          <label class="field">
+            <span class="field__label">Temperature <output id="tempValue">0.7</output></span>
+            <input id="settingTemperature" type="range" min="0" max="2" step="0.1" value="0.7">
+            <span class="field__hint">值越高回答越发散，越低越稳定。</span>
+          </label>
+          <label class="field">
+            <span class="field__label">Max Tokens</span>
+            <input id="settingMaxTokens" type="number" min="1" max="200000" step="1" inputmode="numeric" placeholder="留空则不限制">
+            <span class="field__hint">单次回复的最大 token 数；留空表示不额外限制，由模型服务自行决定。</span>
+          </label>
+        </section>
+
+        <section class="settings__section">
+          <h3 class="settings__heading">插件</h3>
+          <div class="settings__row">
+            <div>
+              <strong>插件管理</strong>
+              <p>查看、启用、禁用或移除已安装的插件。</p>
+            </div>
+            <button class="ghost-btn" id="settingsOpenPluginsBtn" type="button">
+              <svg class="icon" viewBox="0 0 24 24"><use href="#i-puzzle"/></svg>
+              <span>打开插件管理</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings__section">
+          <h3 class="settings__heading">快捷键</h3>
+          <ul class="shortcuts">
+            <li><span>发送消息</span><kbd>Enter</kbd></li>
+            <li><span>消息换行</span><kbd>Shift + Enter</kbd></li>
+            <li><span>新建对话</span><kbd id="kbdNewChat">Ctrl + K</kbd></li>
+            <li><span>展开 / 收起侧栏</span><kbd id="kbdSidebar">Ctrl + B</kbd></li>
+            <li><span>关闭弹窗 / 菜单</span><kbd>Esc</kbd></li>
+          </ul>
+        </section>
+
+        <section class="settings__section">
+          <h3 class="settings__heading">外观</h3>
+          <div class="segmented" role="group" aria-label="主题选择">
+            <button type="button" data-theme-choice="light">浅色</button>
+            <button type="button" data-theme-choice="dark">深色</button>
+          </div>
+        </section>
+
+        <section class="settings__section">
+          <h3 class="settings__heading">数据</h3>
+          <div class="settings__row">
+            <div>
+              <strong>本地对话历史</strong>
+              <p>所有会话仅保存在当前浏览器，不会上传。</p>
+            </div>
+            <button class="ghost-btn ghost-btn--danger" id="clearAllBtn" type="button">清除全部</button>
+          </div>
+        </section>
+
+        <footer class="modal__foot">
+          <button class="ghost-btn" type="button" data-close-settings>取消</button>
+          <button class="primary-btn" type="submit">保存设置</button>
+        </footer>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast-stack" id="toastStack" aria-live="assertive"></div>
+
+  <noscript>
+    <div class="noscript">WeCi 需要启用 JavaScript 才能使用。</div>
+  </noscript>
+
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <script src="vendor/katex.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

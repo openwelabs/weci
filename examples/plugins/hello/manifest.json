@@ -1,0 +1,10 @@
+{
+  "id": "hello",
+  "name": "Hello Plugin",
+  "version": "0.1.0",
+  "description": "示例插件：提供 hello_world 工具，演示 WeCi Plugin API 的最小用法。",
+  "author": "WeCi Examples",
+  "api_version": "0.1",
+  "entry": "plugin.py",
+  "permissions": []
+}

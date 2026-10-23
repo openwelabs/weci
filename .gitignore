@@ -1,0 +1,19 @@
+# WeCi 运行时数据（插件状态、存储）
+.weci/
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

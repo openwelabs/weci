@@ -1,0 +1,10 @@
+{
+  "id": "current_time",
+  "name": "Current Time",
+  "version": "1.0.0",
+  "description": "返回当前日期、时间与时区信息。",
+  "author": "WeCi",
+  "api_version": "0.1",
+  "entry": "plugin.py",
+  "permissions": []
+}
