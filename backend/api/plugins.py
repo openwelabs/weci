@@ -30,6 +30,7 @@ def _entry_to_dict(entry: PluginEntry) -> dict[str, Any]:
         "permissions": list(manifest.get("permissions") or []),
         "tools": list(entry.tools),
         "status": entry.status,  # loaded / failed / disabled
+        "lifecycle_state": entry.lifecycle_state,
         "enabled": entry.enabled,
         "error": entry.error,
         "path": entry.path,

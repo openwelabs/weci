@@ -15,8 +15,8 @@ from typing import Any
 
 import httpx
 
-from sdk.context import PluginContext
-from sdk.permissions import PluginPermissionError
+from weci_sdk.context import FileCap, HttpCap, PluginContext, StorageCap
+from weci_sdk.permissions import PluginPermissionError
 
 
 class PluginContextImpl(PluginContext):
@@ -48,6 +48,53 @@ class PluginContextImpl(PluginContext):
     def _require(self, permission: str, capability: str) -> None:
         if permission not in self._permissions:
             raise PluginPermissionError(self._plugin_id, permission, capability)
+
+    # ------------------------------------------------------------------
+    # 子命名空间（http / files / storage）
+    # ------------------------------------------------------------------
+    class _Http(HttpCap):
+        def __init__(self, ctx: "PluginContextImpl") -> None:
+            self._ctx = ctx
+
+        async def request(self, method, url, *, headers=None, params=None, json=None, timeout=30.0):
+            return await self._ctx.http_request(
+                method, url, headers=headers, params=params, json=json, timeout=timeout
+            )
+
+    class _Files(FileCap):
+        def __init__(self, ctx: "PluginContextImpl") -> None:
+            self._ctx = ctx
+
+        def read(self, path: str) -> str:
+            return self._ctx.read_file(path)
+
+        def write(self, path: str, content: str) -> None:
+            self._ctx.write_file(path, content)
+
+        def list_dir(self, path: str) -> list[dict[str, Any]]:
+            return self._ctx.list_dir(path)
+
+    class _Storage(StorageCap):
+        def __init__(self, ctx: "PluginContextImpl") -> None:
+            self._ctx = ctx
+
+        def get(self, key: str, default: Any = None) -> Any:
+            return self._ctx.storage_get(key, default)
+
+        def set(self, key: str, value: Any) -> None:
+            self._ctx.storage_set(key, value)
+
+    @property
+    def http(self) -> HttpCap:
+        return self._Http(self)
+
+    @property
+    def files(self) -> FileCap:
+        return self._Files(self)
+
+    @property
+    def storage(self) -> StorageCap:
+        return self._Storage(self)
 
     # ------------------------------------------------------------------
     # PluginContext 接口
@@ -105,11 +152,12 @@ class PluginContextImpl(PluginContext):
             if owns_client:
                 await client.aclose()
 
-    # ---- 存储（简单 JSON 文件 KV，插件私有）----
+    # ---- 存储（按 plugin_id 隔离的 JSON KV，插件私有）----
     def _storage_path(self) -> Path | None:
         if self._storage_dir is None:
             return None
-        path = self._storage_dir / f"{self._plugin_id}.json"
+        # 每个插件独立目录：<storage_dir>/<plugin_id>/store.json
+        path = self._storage_dir / self._plugin_id / "store.json"
         return path
 
     def _load_storage(self) -> dict[str, Any]:

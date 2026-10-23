@@ -7,7 +7,7 @@ import zoneinfo
 
 from pydantic import BaseModel, Field
 
-from sdk import Tool, WeCiPlugin
+from weci_sdk import Tool, WeCiPlugin
 
 
 class CurrentTimeArgs(BaseModel):

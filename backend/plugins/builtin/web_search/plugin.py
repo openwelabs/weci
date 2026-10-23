@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 import httpx
 from pydantic import BaseModel, Field
 
-from sdk import Tool, WeCiPlugin
+from weci_sdk import Tool, WeCiPlugin
 
 
 class SearchResult(BaseModel):

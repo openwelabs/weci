@@ -330,6 +330,32 @@ cp -r my_plugin ~/.weci/plugins/
 重启 WeCi 后，Agent 即可看到 `hello_world` 工具。完整示例见
 [`examples/plugins/hello/`](examples/plugins/hello/)。
 
+### 开发自己的插件
+
+完整文档：[`docs/plugins/`](docs/plugins/README.md)
+
+```bash
+# 1. 复制模板
+cp -r examples/plugins/template my-plugin
+cd my-plugin
+
+# 2. 修改 manifest.json（id、name、version、permissions）
+
+# 3. 在 plugin.py 中实现工具
+
+# 4. 安装前校验
+weci plugin validate ./my-plugin
+
+# 5. 安装并启用
+weci plugin install ./my-plugin
+weci plugin enable my-plugin
+
+# 6. 查看详情
+weci plugin info my-plugin
+```
+
+重启 WeCi 后，你的工具会自动出现在 Agent 中。
+
 ### Agent Loop
 
 `backend/services/agent.py` 中的 `run_agent()` 是一个 async generator：

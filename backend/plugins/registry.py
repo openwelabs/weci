@@ -11,15 +11,32 @@
 
 from __future__ import annotations
 
+import enum
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from sdk.plugin import WeCiPlugin
-from sdk.tool import Tool
+from weci_sdk.plugin import WeCiPlugin
+from weci_sdk.tool import Tool
 from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger("weci.plugins")
+
+
+class LifecycleState(str, enum.Enum):
+    """插件生命周期状态。
+
+    DISCOVER → VALIDATE → LOAD → REGISTER → READY → DISABLE → UNLOAD
+    """
+
+    DISCOVERED = "discovered"
+    VALIDATING = "validating"
+    LOADING = "loading"
+    REGISTERING = "registering"
+    READY = "ready"          # 已启用并可服务
+    DISABLED = "disabled"    # 已禁用（工具未注册）
+    FAILED = "failed"        # 加载/校验失败
+    UNLOADED = "unloaded"    # 已卸载
 
 
 @dataclass
@@ -31,7 +48,8 @@ class PluginEntry:
     instance: WeCiPlugin | None
     path: str
     enabled: bool = True
-    status: str = "loaded"  # loaded / failed / disabled
+    status: str = "loaded"  # loaded / failed / disabled（运行态摘要，向后兼容）
+    lifecycle_state: str = LifecycleState.READY.value
     error: str | None = None
     tools: list[str] = field(default_factory=list)
 
@@ -63,6 +81,11 @@ class PluginRegistry:
             path=path,
             enabled=enabled,
             status="failed" if error else ("disabled" if not enabled else "loaded"),
+            lifecycle_state=(
+                LifecycleState.FAILED.value if error
+                else LifecycleState.DISABLED.value if not enabled
+                else LifecycleState.READY.value
+            ),
             error=error,
         )
         self._plugins[plugin_id] = entry
@@ -85,6 +108,7 @@ class PluginRegistry:
                 entry.instance.on_unload()
         except Exception:  # noqa: BLE001
             logger.exception("插件 %s on_unload 出错", plugin_id)
+        entry.lifecycle_state = LifecycleState.UNLOADED.value
         del self._plugins[plugin_id]
         return True
 
@@ -100,6 +124,7 @@ class PluginRegistry:
             return False
         entry.enabled = True
         entry.status = "loaded"
+        entry.lifecycle_state = LifecycleState.READY.value
         entry.error = None
         self._register_plugin_tools(entry)
         logger.info("插件已启用: %s", plugin_id)
@@ -113,6 +138,7 @@ class PluginRegistry:
             self.unregister_tool(tool_name)
         entry.enabled = False
         entry.status = "disabled"
+        entry.lifecycle_state = LifecycleState.DISABLED.value
         logger.info("插件已禁用: %s", plugin_id)
         return True
 

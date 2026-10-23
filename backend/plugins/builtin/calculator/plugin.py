@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sdk import Tool, WeCiPlugin
+from weci_sdk import Tool, WeCiPlugin
 
 _BIN_OPS: dict[type, Any] = {
     ast.Add: operator.add,

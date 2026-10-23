@@ -336,6 +336,32 @@ cp -r my_plugin ~/.weci/plugins/
 Restart WeCi and the Agent sees `hello_world`. Full example in
 [`examples/plugins/hello/`](examples/plugins/hello/).
 
+### Develop your own plugin
+
+Full documentation: [`docs/plugins/`](docs/plugins/README.md)
+
+```bash
+# 1. Copy the template
+cp -r examples/plugins/template my-plugin
+cd my-plugin
+
+# 2. Edit manifest.json (id, name, version, permissions)
+
+# 3. Implement your tool in plugin.py
+
+# 4. Validate before installing
+weci plugin validate ./my-plugin
+
+# 5. Install and enable
+weci plugin install ./my-plugin
+weci plugin enable my-plugin
+
+# 6. Inspect
+weci plugin info my-plugin
+```
+
+Restart WeCi and your tool appears in the Agent automatically.
+
 ### Agent Loop
 
 `backend/services/agent.py` `run_agent()` is an async generator:

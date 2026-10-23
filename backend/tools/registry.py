@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from sdk.context import PluginContext
-from sdk.tool import Tool, ToolExecutionResult
+from weci_sdk.context import PluginContext
+from weci_sdk.tool import Tool, ToolExecutionResult
 from backend.tools.permission import AllowListPermission, ToolPermission
 
 

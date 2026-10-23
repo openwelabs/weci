@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sdk import PluginContext, Tool, WeCiPlugin
+from weci_sdk import PluginContext, Tool, WeCiPlugin
 
 
 # --------------------------------------------------------------------------

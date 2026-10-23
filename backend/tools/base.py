@@ -4,6 +4,6 @@ WeCi 的工具基类现在统一定义在 :mod:`sdk.tool`，内置插件与第�
 ``sdk.Tool``。此模块保留原导入路径 ``backend.tools.base`` 以兼容历史代码。
 """
 
-from sdk.tool import Tool, ToolExecutionResult, _safe_error_message
+from weci_sdk.tool import Tool, ToolExecutionResult, _safe_error_message
 
 __all__ = ["Tool", "ToolExecutionResult"]

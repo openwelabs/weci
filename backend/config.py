@@ -56,7 +56,7 @@ class Settings:
     """运行期配置，来源于环境变量。"""
 
     app_name: str = "WeCi"
-    version: str = "0.4.0"
+    version: str = "0.5.0"
 
     host: str = _env("WECI_HOST", "127.0.0.1")
     port: int = _env_int("WECI_PORT", 8000)

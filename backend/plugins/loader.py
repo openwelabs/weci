@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from sdk.plugin import WeCiPlugin
+from weci_sdk.plugin import WeCiPlugin
 from backend.plugins.context import PluginContextImpl
 from backend.plugins.manifest import Manifest, ManifestError, load_manifest
 from backend.plugins.registry import PluginEntry, PluginRegistry
@@ -35,10 +35,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # 默认用户插件目录（可通过 WECI_PLUGINS_DIR 覆盖）
 DEFAULT_USER_PLUGINS_DIR = Path.home() / ".weci" / "plugins"
-# 状态文件与存储目录放在项目目录下，使部署自包含
+# 运行时数据放在项目目录下，使部署自包含
 DATA_DIR = PROJECT_ROOT / ".weci"
 STATE_FILE = DATA_DIR / "plugin_state.json"
-DEFAULT_STORAGE_DIR = DATA_DIR / "plugin_storage"
+# 插件私有存储：<DATA_DIR>/plugins/data/<plugin_id>/store.json
+DEFAULT_STORAGE_DIR = DATA_DIR / "plugins" / "data"
 
 
 class PluginLoader:
@@ -61,7 +62,7 @@ class PluginLoader:
         self.state_file = state_file or STATE_FILE
         self.storage_dir = storage_dir or DEFAULT_STORAGE_DIR
 
-        # 确保项目根目录在 sys.path 中，使插件能 `from sdk import ...`
+        # 确保项目根目录在 sys.path 中，使插件能 `from weci_sdk import ...`
         if str(PROJECT_ROOT) not in sys.path:
             sys.path.insert(0, str(PROJECT_ROOT))
 

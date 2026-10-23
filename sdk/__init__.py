@@ -1,30 +1,12 @@
-"""WeCi Plugin SDK —— 插件开发者唯一需要依赖的公开 API。
+"""向后兼容别名包。
 
-第三方插件**只应**从 ``sdk`` 导入，不应导入 ``backend.*`` 内部模块。
+``weci_sdk`` 是 WeCi Plugin SDK 的正式公开包名。此 ``sdk`` 包仅为兼容历史代码
+与已有插件而保留，等同于::
 
-使用::
+    from weci_sdk import *
 
-    from sdk import WeCiPlugin, Tool, PluginContext, ToolExecutionResult
-    from pydantic import BaseModel, Field
+新插件请使用 ``from weci_sdk import ...``。
 """
 
-from sdk.context import PluginContext
-from sdk.permissions import (
-    KNOWN_PERMISSIONS,
-    PERMISSION_DESCRIPTIONS,
-    PluginPermissionError,
-)
-from sdk.plugin import WeCiPlugin
-from sdk.tool import Tool, ToolExecutionResult
-
-__all__ = [
-    "WeCiPlugin",
-    "Tool",
-    "ToolExecutionResult",
-    "PluginContext",
-    "PluginPermissionError",
-    "KNOWN_PERMISSIONS",
-    "PERMISSION_DESCRIPTIONS",
-]
-
-__version__ = "0.1.0"
+from weci_sdk import *  # noqa: F401,F403
+from weci_sdk import __version__  # noqa: F401
