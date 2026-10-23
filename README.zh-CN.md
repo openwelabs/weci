@@ -334,27 +334,39 @@ cp -r my_plugin ~/.weci/plugins/
 
 完整文档：[`docs/plugins/`](docs/plugins/README.md)
 
+推荐使用官方开发工具
+[**weci-maker**](https://github.com/openwelabs/weci-maker)（类似 Cargo 的插件 CLI）：
+
 ```bash
-# 1. 复制模板
-cp -r examples/plugins/template my-plugin
+# 0. 先安装一次 weci-maker（它复用 WeCi 的 SDK 与加载器）
+pip install -e ~/repos/weci
+pip install -e ~/repos/weci-maker
+
+# 1. 创建插件项目（manifest.json + plugin.py + tests/）
+weci-maker new my-plugin
 cd my-plugin
 
 # 2. 修改 manifest.json（id、name、version、permissions）
 
 # 3. 在 plugin.py 中实现工具
 
-# 4. 安装前校验
-weci plugin validate ./my-plugin
+# 4. 检查（manifest、入口模块、WeCiPlugin 子类、工具 schema）
+weci-maker check
 
-# 5. 安装并启用
-weci plugin install ./my-plugin
-weci plugin enable my-plugin
+# 5. 运行插件自测试
+python -m pytest tests/
 
-# 6. 查看详情
-weci plugin info my-plugin
+# 6. 构建可分发的 .wcp 插件包
+weci-maker build            # → dist/my-plugin-0.1.0.wcp
+
+# 7. 安装到 ~/.weci/plugins/（与 `weci plugin install` 等价）
+weci-maker install dist/my-plugin-0.1.0.wcp
 ```
 
 重启 WeCi 后，你的工具会自动出现在 Agent 中。
+
+不使用 weci-maker 也可以手动开发：复制 `examples/plugins/template/`，
+然后 `weci plugin validate ./my-plugin` 校验、`weci plugin install ./my-plugin` 安装。
 
 ### Agent Loop
 

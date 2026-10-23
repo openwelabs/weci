@@ -2,7 +2,18 @@
 
 复制此目录开始开发你的 WeCi 插件。
 
-## 使用步骤
+> **推荐**：使用官方开发工具 [weci-maker](https://github.com/openwelabs/weci-maker)
+> 可以免去手动复制模板：
+>
+> ```bash
+> weci-maker new my-plugin    # 生成与本模板一致的项目骨架
+> cd my-plugin
+> weci-maker check            # 检查
+> weci-maker build            # 打包为 dist/*.wcp
+> weci-maker install dist/my-plugin-0.1.0.wcp   # 安装到 ~/.weci/plugins/
+> ```
+
+## 手动使用步骤
 
 ```bash
 # 1. 复制模板

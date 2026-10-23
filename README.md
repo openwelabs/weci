@@ -340,27 +340,41 @@ Restart WeCi and the Agent sees `hello_world`. Full example in
 
 Full documentation: [`docs/plugins/`](docs/plugins/README.md)
 
+The recommended toolchain is
+[**weci-maker**](https://github.com/openwelabs/weci-maker) — the official plugin
+development CLI (think Cargo for WeCi plugins):
+
 ```bash
-# 1. Copy the template
-cp -r examples/plugins/template my-plugin
+# 0. Install weci-maker once (it reuses WeCi's SDK & loader)
+pip install -e ~/repos/weci
+pip install -e ~/repos/weci-maker
+
+# 1. Scaffold a plugin project (manifest.json + plugin.py + tests/)
+weci-maker new my-plugin
 cd my-plugin
 
 # 2. Edit manifest.json (id, name, version, permissions)
 
 # 3. Implement your tool in plugin.py
 
-# 4. Validate before installing
-weci plugin validate ./my-plugin
+# 4. Check (manifest, entry module, WeCiPlugin subclass, tool schemas)
+weci-maker check
 
-# 5. Install and enable
-weci plugin install ./my-plugin
-weci plugin enable my-plugin
+# 5. Run the plugin's own tests
+python -m pytest tests/
 
-# 6. Inspect
-weci plugin info my-plugin
+# 6. Build a distributable .wcp package
+weci-maker build            # → dist/my-plugin-0.1.0.wcp
+
+# 7. Install into ~/.weci/plugins/ (same as `weci plugin install`)
+weci-maker install dist/my-plugin-0.1.0.wcp
 ```
 
 Restart WeCi and your tool appears in the Agent automatically.
+
+Without weci-maker, the manual flow still works: copy
+`examples/plugins/template/`, then `weci plugin validate ./my-plugin` and
+`weci plugin install ./my-plugin`.
 
 ### Agent Loop
 
