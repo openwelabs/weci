@@ -114,6 +114,11 @@ class Tool(ABC):
     description: str
     args_model: Type[BaseModel]
 
+    # 该工具需要的权限（``<scope>:<action>``，如 "workspace:read"）。
+    # 空表示不需要额外权限。ToolRegistry 会在执行前交给 Permission Manager 判定，
+    # **Default Deny**：声明了但未授权的权限一律拒绝执行。
+    permissions: tuple[str, ...] = ()
+
     # ------------------------------------------------------------------
     # Schema
     # ------------------------------------------------------------------

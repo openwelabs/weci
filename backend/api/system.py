@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel
 
 from backend.config import settings
@@ -19,7 +19,14 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/config")
-async def get_config() -> dict[str, object]:
+async def get_config(request: Request) -> dict[str, object]:
+    # Provider 只暴露是否存在与默认 id，不暴露任何 Key
+    manager = getattr(request.app.state, "provider_manager", None)
+    provider_info = (
+        manager.public_config()
+        if manager is not None
+        else {"has_provider": False, "default_provider_id": None}
+    )
     return {
         "app": settings.app_name,
         "version": settings.version,
@@ -28,6 +35,7 @@ async def get_config() -> dict[str, object]:
         "temperature": settings.default_temperature,
         "max_tokens": settings.default_max_tokens,
         "has_server_key": settings.has_api_key,
+        **provider_info,
     }
 
 

@@ -51,8 +51,16 @@ class PluginLoader:
         user_dir: Path | None = None,
         state_file: Path | None = None,
         storage_dir: Path | None = None,
+        memory_store: Any = None,
+        permission_manager: Any = None,
+        workspace_guard: Any = None,
     ) -> None:
         self.registry = registry
+        # Memory 存储由 Core 注入，插件通过 context.memory 访问
+        self.memory_store = memory_store
+        # 统一权限层：插件声明的低风险权限在加载时自动登记，高风险需用户确认
+        self.permission_manager = permission_manager
+        self.workspace_guard = workspace_guard
         self.builtin_dir = builtin_dir or (
             Path(__file__).resolve().parent / "builtin"
         )
@@ -203,6 +211,9 @@ class PluginLoader:
             permissions=manifest.permissions,
             config=manifest.config,
             storage_dir=self.storage_dir,
+            memory_store=self.memory_store,
+            workspace_guard=self.workspace_guard,
+            permission_manager=self.permission_manager,
         )
         instance._context = context  # 供工具执行时使用  # noqa: SLF001
         try:
@@ -237,6 +248,18 @@ class PluginLoader:
             "启用" if enabled else "已禁用",
             ", ".join(entry.tools) or "无",
         )
+        if self.permission_manager is not None:
+            self.permission_manager.log(
+                "plugin.loaded",
+                plugin=manifest.id,
+                version=manifest.version,
+                permissions=",".join(manifest.permissions) or "-",
+                enabled=enabled,
+            )
+            if enabled:
+                self.permission_manager.grant_declared(
+                    f"plugin:{manifest.id}", manifest.permissions
+                )
         return entry
 
     # ------------------------------------------------------------------
@@ -265,6 +288,12 @@ class PluginLoader:
     def enable_plugin(self, plugin_id: str) -> bool:
         if self.registry.enable_plugin(plugin_id):
             self._set_enabled(plugin_id, True)
+            entry = self.registry.get_plugin(plugin_id)
+            if self.permission_manager is not None and entry is not None:
+                self.permission_manager.grant_declared(
+                    f"plugin:{plugin_id}",
+                    (entry.manifest or {}).get("permissions") or [],
+                )
             return True
         return False
 
@@ -325,11 +354,17 @@ def _load_module_from_file(module_name: str, path: Path):
     if spec is None or spec.loader is None:
         raise ImportError(f"无法创建模块 spec：{path}")
     module = importlib.util.module_from_spec(spec)
+    # 先注册到 sys.modules：pydantic 解析前向引用（如 Literal 别名）时需要按模块名查找命名空间
+    sys.modules[spec.name] = module
     # 把插件所在目录加入 sys.path，便于插件 import 同目录的其他模块
     plugin_dir = str(path.parent)
     if plugin_dir not in sys.path:
         sys.path.insert(0, plugin_dir)
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 

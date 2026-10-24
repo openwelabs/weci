@@ -1,0 +1,10 @@
+{
+  "id": "memory",
+  "name": "Memory",
+  "version": "1.0.0",
+  "description": "让 Agent 在用户明确要求时保存或删除长期记忆（Memory）。",
+  "author": "WeCi",
+  "api_version": "0.1",
+  "entry": "plugin.py",
+  "permissions": ["memory"]
+}

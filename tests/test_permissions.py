@@ -22,7 +22,7 @@ def test_no_network_permission_denied(storage_dir: Path):
         # http_request 是 async，用 asyncio 跑
         import asyncio
         asyncio.run(ctx.http_request("GET", "http://example.com"))
-    assert exc.value.permission == "network"
+    assert exc.value.permission == "network:access"
 
 
 def test_no_storage_permission_denied(storage_dir: Path):

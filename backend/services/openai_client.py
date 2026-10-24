@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 import httpx
 
 from backend.config import settings
+from backend.services.context import ModelContext
 
 
 class UpstreamError(Exception):
@@ -81,8 +82,66 @@ def _extract_error_message(body: str, status_code: int) -> str:
     return text or f"模型服务返回了 HTTP {status_code}。"
 
 
+# 图片被上游拒绝时补充的提示。Provider 无法可靠查询模型能力，
+# 因此以模型服务返回的错误为准，在原始信息后追加可操作的说明。
+_VISION_HINT = (
+    "当前消息包含图片。请确认所选模型{m}支持 Vision（图片输入），"
+    "或移除图片后重试。"
+)
+
+_IMAGE_ERROR_KEYWORDS = (
+    "image",
+    "vision",
+    "multimodal",
+    "image_url",
+    "content type",
+)
+
+
+def resolve_messages(
+    messages: list[dict[str, Any]] | ModelContext,
+) -> list[dict[str, Any]]:
+    """Provider 的最终请求消息：统一从 Context 生成。
+
+    Chat 与 Agent 都传入 ``ModelContext``；为兼容内部工具函数与测试，
+    也接受已经转换好的 OpenAI-compatible 消息列表。
+    """
+    if isinstance(messages, ModelContext):
+        return messages.to_openai_messages()
+    return messages
+
+
+def payload_has_images(messages: list[dict[str, Any]]) -> bool:
+    """判断发给上游的消息是否包含图片（多模态 content 数组）。"""
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    return True
+    return False
+
+
+def build_upstream_error(
+    body: str,
+    status_code: int,
+    *,
+    messages: list[dict[str, Any]] | None = None,
+    model: str = "",
+) -> UpstreamError:
+    """构造上游错误；图片请求被拒时追加“模型是否支持 Vision”的提示。"""
+    message = _extract_error_message(body, status_code)
+    if messages and payload_has_images(messages):
+        lowered = message.lower()
+        image_related = any(word in lowered for word in _IMAGE_ERROR_KEYWORDS)
+        if image_related or status_code in (400, 413, 415, 422):
+            target = f"（{model}）" if model else ""
+            message = f"{message}\n\n提示：{_VISION_HINT.format(m=target)}"
+    return UpstreamError(message, status_code=status_code)
+
+
 async def stream_chat(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]] | ModelContext,
     *,
     api_base: str,
     api_key: str,
@@ -90,7 +149,12 @@ async def stream_chat(
     temperature: float,
     max_tokens: int | None = None,
 ) -> AsyncIterator[str]:
-    """向上游发起流式请求，逐段 yield 文本增量。"""
+    """向上游发起流式请求，逐段 yield 文本增量。
+
+    ``messages`` 是 ``ContextManager.build()`` 产出的 ``ModelContext``
+    （也接受等价的 OpenAI-compatible 消息列表），本函数不感知具体模态。
+    """
+    messages = resolve_messages(messages)
     url = build_chat_completions_url(api_base)
 
     payload: dict[str, Any] = {
@@ -120,9 +184,11 @@ async def stream_chat(
             async with client.stream("POST", url, json=payload, headers=headers) as response:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", errors="replace")
-                    raise UpstreamError(
-                        _extract_error_message(body, response.status_code),
-                        status_code=response.status_code,
+                    raise build_upstream_error(
+                        body,
+                        response.status_code,
+                        messages=messages,
+                        model=model,
                     )
 
                 async for raw_line in response.aiter_lines():
@@ -159,6 +225,61 @@ async def stream_chat(
                     if content:
                         yield content
 
+    except UpstreamError:
+        raise
+    except httpx.TimeoutException as exc:
+        raise UpstreamError("模型服务响应超时，请稍后重试。") from exc
+    except httpx.HTTPError as exc:
+        raise UpstreamError(f"无法连接到模型服务：{exc}") from exc
+
+
+async def complete_chat(
+    messages: list[dict[str, Any]] | ModelContext,
+    *,
+    api_base: str,
+    api_key: str,
+    model: str,
+    temperature: float,
+    max_tokens: int | None = None,
+) -> str:
+    """非流式请求，用于模型声明 ``streaming=false`` 的场景。"""
+    messages = resolve_messages(messages)
+    url = build_chat_completions_url(api_base)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    timeout = httpx.Timeout(
+        connect=settings.connect_timeout,
+        read=settings.read_timeout,
+        write=30.0,
+        pool=settings.connect_timeout,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            response = await client.post(
+                url,
+                json=_build_payload(
+                    messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream=False,
+                ),
+                headers=headers,
+            )
+            if response.status_code >= 400:
+                body = response.content.decode("utf-8", errors="replace")
+                raise build_upstream_error(
+                    body, response.status_code, messages=messages, model=model
+                )
+            data = response.json()
+            choices = data.get("choices") or []
+            if not choices:
+                return ""
+            message = choices[0].get("message") or {}
+            return str(message.get("content") or "")
     except UpstreamError:
         raise
     except httpx.TimeoutException as exc:
@@ -212,7 +333,7 @@ def _build_payload(
 
 
 async def stream_chat_with_tools(
-    messages: list[dict[str, Any]],
+    messages: list[dict[str, Any]] | ModelContext,
     *,
     tools: list[dict[str, Any]],
     api_base: str,
@@ -220,6 +341,7 @@ async def stream_chat_with_tools(
     model: str,
     temperature: float,
     max_tokens: int | None = None,
+    stream: bool = True,
 ) -> AsyncIterator[dict[str, Any]]:
     """带工具的流式请求。
 
@@ -227,9 +349,24 @@ async def stream_chat_with_tools(
       - {"delta": str}             文本增量（最终回答）
       - {"tool_calls": [ToolCall]} 本轮到的工具调用（在流结束时一次性 yield）
 
+    ``stream=False`` 时（模型声明不支持 Streaming）直接走非流式请求。
     若模型服务不支持流式 tool calling（返回 400），自动退回非流式请求，
     把最终文本或工具调用同样以这两种事件返回，保证上层 Agent Loop 逻辑一致。
     """
+    messages = resolve_messages(messages)
+    if not stream:
+        async for event in _non_stream_with_tools(
+            messages,
+            tools=tools,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
+            yield event
+        return
+
     url = build_chat_completions_url(api_base)
     headers = {
         "Accept": "text/event-stream",
@@ -262,9 +399,11 @@ async def stream_chat_with_tools(
             ) as response:
                 if response.status_code >= 400:
                     body = (await response.aread()).decode("utf-8", errors="replace")
-                    raise UpstreamError(
-                        _extract_error_message(body, response.status_code),
-                        status_code=response.status_code,
+                    raise build_upstream_error(
+                        body,
+                        response.status_code,
+                        messages=messages,
+                        model=model,
                     )
 
                 # 增量解析 tool_calls
@@ -390,9 +529,11 @@ async def _non_stream_with_tools(
             )
             if response.status_code >= 400:
                 body = response.content.decode("utf-8", errors="replace")
-                raise UpstreamError(
-                    _extract_error_message(body, response.status_code),
-                    status_code=response.status_code,
+                raise build_upstream_error(
+                    body,
+                    response.status_code,
+                    messages=messages,
+                    model=model,
                 )
             data = response.json()
             choices = data.get("choices") or []
@@ -421,13 +562,6 @@ async def _non_stream_with_tools(
         raise UpstreamError("模型服务响应超时，请稍后重试。")
     except httpx.HTTPError as exc:
         raise UpstreamError(f"无法连接到模型服务：{exc}")
-
-
-def _auth_headers(api_key: str) -> dict[str, str]:
-    headers = {"Accept": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    return headers
 
 
 async def check_connection(
@@ -520,3 +654,63 @@ async def check_connection(
         return fail("连接超时，请检查 Endpoint 是否可达。")
     except httpx.HTTPError as exc:
         return fail(f"无法连接到模型服务：{exc}")
+
+
+async def check_model(*, api_base: str, api_key: str, model: str) -> dict[str, Any]:
+    """测试单个模型是否可用，返回结构化结果（不抛异常）。
+
+    发送一次极小的非流式 chat 请求，用于确认 Endpoint、API Key 与
+    Model 三者可用；与 ``check_connection`` 相比不会回退到 /models。
+    """
+    result: dict[str, Any] = {
+        "ok": False,
+        "message": "",
+        "latency_ms": None,
+        "models": None,
+    }
+    started = time.perf_counter()
+
+    def done(ok: bool, message: str = "") -> dict[str, Any]:
+        result["ok"] = ok
+        result["message"] = message
+        result["latency_ms"] = round((time.perf_counter() - started) * 1000)
+        return result
+
+    timeout = httpx.Timeout(
+        connect=settings.connect_timeout,
+        read=20.0,
+        write=20.0,
+        pool=settings.connect_timeout,
+    )
+    headers = _auth_headers(api_key)
+    headers["Content-Type"] = "application/json"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            response = await client.post(
+                build_chat_completions_url(api_base),
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "ping"}],
+                    "max_tokens": 1,
+                    "stream": False,
+                },
+                headers=headers,
+            )
+    except UpstreamError as exc:
+        return done(False, exc.message)
+    except httpx.TimeoutException:
+        return done(False, "连接超时，请检查 Endpoint 是否可达。")
+    except httpx.HTTPError as exc:
+        return done(False, f"无法连接到模型服务：{exc}")
+
+    if response.status_code < 400:
+        return done(True, "模型可用。")
+
+    body = response.content.decode("utf-8", errors="replace")
+    detail = _extract_error_message(body, response.status_code)
+    if response.status_code in (401, 403):
+        return done(False, f"API Key 无效或权限不足（HTTP {response.status_code}）：{detail}")
+    if response.status_code == 404:
+        return done(False, f"模型不存在或接口不可用（HTTP 404）：{detail}")
+    return done(False, f"模型调用失败（HTTP {response.status_code}）：{detail}")

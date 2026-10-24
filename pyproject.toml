@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "weci"
-version = "0.5.0"
+version = "0.14.0"
 description = "WeCi — 本地优先的 AI 对话客户端 + Agent 工作台"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,6 +14,7 @@ dependencies = [
     "httpx>=0.27,<1.0",
     "python-dotenv>=1.0,<2.0",
     "pydantic>=2.0,<3.0",
+    "pypdf>=4.0,<6.0",
 ]
 
 [project.scripts]
@@ -25,12 +26,14 @@ packages = [
     "backend.api",
     "backend.services",
     "backend.tools",
+    "backend.mcp",
     "backend.plugins",
     "backend.plugins.builtin",
     "backend.plugins.builtin.calculator",
     "backend.plugins.builtin.current_time",
     "backend.plugins.builtin.web_search",
     "backend.plugins.builtin.computer",
+    "backend.plugins.builtin.memory",
     "weci_sdk",
     "sdk",
 ]
@@ -41,3 +44,4 @@ backend = ["frontend/**/*"]
 "backend.plugins.builtin.current_time" = ["manifest.json"]
 "backend.plugins.builtin.web_search" = ["manifest.json"]
 "backend.plugins.builtin.computer" = ["manifest.json"]
+"backend.plugins.builtin.memory" = ["manifest.json"]

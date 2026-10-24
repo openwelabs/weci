@@ -127,6 +127,7 @@ class WebSearchTool(Tool):
     name = "web_search"
     description = "通过搜索引擎查询互联网上的最新信息。当问题需要实时、最新或不确定的事实时使用。"
     args_model = WebSearchArgs
+    permissions = ("network:access",)
 
     def __init__(self, provider: SearchProvider | None = None) -> None:
         self._provider = provider
@@ -164,6 +165,7 @@ class FetchUrlTool(Tool):
     name = "fetch_url"
     description = "抓取指定 URL 的网页内容并提取正文文本。用于获取搜索结果链接里的详细信息。"
     args_model = FetchUrlArgs
+    permissions = ("network:access",)
 
     async def execute(self, args: FetchUrlArgs, context=None) -> str:
         if not re.match(r"^https?://", args.url, re.IGNORECASE):

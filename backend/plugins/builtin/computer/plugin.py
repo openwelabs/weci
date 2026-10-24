@@ -1,7 +1,8 @@
 """Computer Control 内置插件。
 
 提供执行命令、读写文件、剪贴板等基础电脑控制能力。
-需要 process / filesystem.read / filesystem.write / clipboard 权限。
+每个工具在注册时声明自己需要的权限，Agent 调用前统一由 Permission Manager
+判定：Default Deny，未授权一律不执行。
 """
 
 from __future__ import annotations
@@ -18,14 +19,15 @@ from weci_sdk import PluginContext, Tool, WeCiPlugin
 # --------------------------------------------------------------------------
 class RunCommandArgs(BaseModel):
     command: str = Field(..., description="要执行的 shell 命令。", max_length=4000)
-    cwd: str | None = Field(default=None, description="工作目录，默认当前目录。")
+    cwd: str | None = Field(default=None, description="工作目录（必须在 Workspace 内）。")
     timeout: float = Field(default=30.0, description="超时秒数，默认 30。", ge=1, le=600)
 
 
 class RunCommandTool(Tool):
     name = "run_command"
-    description = "在本机执行 shell 命令，返回 stdout / stderr / 返回码。"
+    description = "在 Workspace 内执行 shell 命令，返回 stdout / stderr / 返回码。"
     args_model = RunCommandArgs
+    permissions = ("command:execute",)
 
     async def execute(self, args: RunCommandArgs, context: PluginContext | None = None) -> dict[str, Any]:
         if context is None:
@@ -40,13 +42,14 @@ class RunCommandTool(Tool):
 # read_file
 # --------------------------------------------------------------------------
 class ReadFileArgs(BaseModel):
-    path: str = Field(..., description="要读取的文件绝对路径或相对路径。")
+    path: str = Field(..., description="要读取的文件路径（Workspace 内，相对或绝对）。")
 
 
 class ReadFileTool(Tool):
     name = "read_file"
-    description = "读取文本文件内容。"
+    description = "读取 Workspace 内文本文件的内容。"
     args_model = ReadFileArgs
+    permissions = ("workspace:read",)
 
     async def execute(self, args: ReadFileArgs, context: PluginContext | None = None) -> str:
         if context is None:
@@ -58,14 +61,15 @@ class ReadFileTool(Tool):
 # write_file
 # --------------------------------------------------------------------------
 class WriteFileArgs(BaseModel):
-    path: str = Field(..., description="要写入的文件路径。")
+    path: str = Field(..., description="要写入的文件路径（Workspace 内）。")
     content: str = Field(..., description="要写入的文本内容（覆盖）。")
 
 
 class WriteFileTool(Tool):
     name = "write_file"
-    description = "向文件写入文本内容（覆盖已有文件）。"
+    description = "向 Workspace 内的文件写入文本内容（覆盖已有文件）。"
     args_model = WriteFileArgs
+    permissions = ("workspace:write",)
 
     async def execute(self, args: WriteFileArgs, context: PluginContext | None = None) -> str:
         if context is None:
@@ -75,16 +79,37 @@ class WriteFileTool(Tool):
 
 
 # --------------------------------------------------------------------------
+# delete_file
+# --------------------------------------------------------------------------
+class DeleteFileArgs(BaseModel):
+    path: str = Field(..., description="要删除的文件路径（Workspace 内）。")
+
+
+class DeleteFileTool(Tool):
+    name = "delete_file"
+    description = "删除 Workspace 内的一个文件。"
+    args_model = DeleteFileArgs
+    permissions = ("workspace:delete",)
+
+    async def execute(self, args: DeleteFileArgs, context: PluginContext | None = None) -> str:
+        if context is None:
+            raise RuntimeError("no plugin context")
+        context.delete_file(args.path)
+        return f"已删除 {args.path}"
+
+
+# --------------------------------------------------------------------------
 # list_dir
 # --------------------------------------------------------------------------
 class ListDirArgs(BaseModel):
-    path: str = Field(default=".", description="要列出的目录路径，默认当前目录。")
+    path: str = Field(default=".", description="要列出的目录路径（Workspace 内），默认根目录。")
 
 
 class ListDirTool(Tool):
     name = "list_dir"
-    description = "列出目录下的文件和子目录。"
+    description = "列出 Workspace 内某个目录下的文件和子目录。"
     args_model = ListDirArgs
+    permissions = ("workspace:read",)
 
     async def execute(self, args: ListDirArgs, context: PluginContext | None = None) -> list[dict[str, Any]]:
         if context is None:
@@ -99,6 +124,7 @@ class ClipboardGetTool(Tool):
     name = "clipboard_get"
     description = "读取系统剪贴板的文本内容。"
     args_model = BaseModel
+    permissions = ("clipboard:read",)
 
     async def execute(self, args: BaseModel, context: PluginContext | None = None) -> str:
         if context is None:
@@ -117,6 +143,7 @@ class ClipboardSetTool(Tool):
     name = "clipboard_set"
     description = "将文本写入系统剪贴板。"
     args_model = ClipboardSetArgs
+    permissions = ("clipboard:write",)
 
     async def execute(self, args: ClipboardSetArgs, context: PluginContext | None = None) -> str:
         if context is None:
@@ -139,6 +166,7 @@ class ComputerPlugin(WeCiPlugin):
             RunCommandTool(),
             ReadFileTool(),
             WriteFileTool(),
+            DeleteFileTool(),
             ListDirTool(),
             ClipboardGetTool(),
             ClipboardSetTool(),

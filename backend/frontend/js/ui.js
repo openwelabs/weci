@@ -8,6 +8,7 @@
 
 import { icon, formatClock } from './utils.js';
 import { createProse, enhanceMarkdown, typingEl } from './markdown.js';
+import { formatBytes } from './attachments.js';
 
 /* --------------------------------------------------------------------------
    Toast 通知
@@ -68,48 +69,117 @@ export async function copyText(text) {
 
 /* --------------------------------------------------------------------------
    工具调用卡片（Agent 模式）
+
+   只展示实际发生的执行事实：工具名、参数、返回结果、状态与耗时。
+   不展示模型的隐藏推理过程。参数与结果默认折叠，长输出在展开区域内滚动。
    -------------------------------------------------------------------------- */
 
 const TOOL_STATUS_LABEL = {
   running: '执行中',
   done: '已完成',
   error: '失败',
+  interrupted: '已中断',
 };
 
+const AGENT_STATE_LABEL = {
+  running: '执行中',
+  done: '已完成',
+  error: '执行失败',
+  stopped: '已停止',
+  max_steps: '达到最大步数',
+};
+
+function formatArguments(value) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return trimmed;
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function createDetails(label, text, countText) {
+  const details = document.createElement('details');
+  details.className = 'tool-call__details';
+
+  const summary = document.createElement('summary');
+  summary.className = 'tool-call__summary';
+
+  const title = document.createElement('span');
+  title.className = 'tool-call__summary-label';
+  title.textContent = label;
+  summary.appendChild(title);
+
+  if (countText) {
+    const meta = document.createElement('span');
+    meta.className = 'tool-call__summary-meta';
+    meta.textContent = countText;
+    summary.appendChild(meta);
+  }
+
+  details.appendChild(summary);
+
+  const pre = document.createElement('pre');
+  pre.className = 'tool-call__pre';
+  pre.textContent = text;
+  details.appendChild(pre);
+
+  return details;
+}
+
 /**
- * 构建一条工具调用的紧凑卡片。默认只展示工具名、状态、耗时，
- * 不暴露内部参数与工具返回内容（安全要求）。
+ * 构建一条工具调用的卡片。
+ * 默认只显示工具名 / 步骤 / 状态 / 耗时；参数与结果折叠在 details 中。
  */
 export function createToolCallCard(tc) {
+  const status = tc.status || 'running';
   const card = document.createElement('div');
-  card.className = `tool-call tool-call--${tc.status}`;
+  card.className = `tool-call tool-call--${status}`;
   card.dataset.toolCallId = tc.id;
 
   const head = document.createElement('div');
   head.className = 'tool-call__head';
 
-  const cpu = document.createElement('span');
-  cpu.className = 'tool-call__icon';
-  cpu.appendChild(icon('cpu'));
-  head.appendChild(cpu);
+  const stateIcon = document.createElement('span');
+  stateIcon.className = `tool-call__state tool-call__state--${status}`;
+  if (status === 'running') {
+    const spinner = document.createElement('span');
+    spinner.className = 'tool-call__spinner';
+    stateIcon.appendChild(spinner);
+    stateIcon.setAttribute('aria-label', '执行中');
+  } else {
+    stateIcon.appendChild(icon(status === 'done' ? 'check' : 'alert'));
+    stateIcon.setAttribute('aria-label', TOOL_STATUS_LABEL[status] || status);
+  }
+  head.appendChild(stateIcon);
 
   const name = document.createElement('span');
   name.className = 'tool-call__name';
   name.textContent = tc.name;
   head.appendChild(name);
 
-  const status = document.createElement('span');
-  status.className = `tool-call__status tool-call__status--${tc.status}`;
-  status.textContent = TOOL_STATUS_LABEL[tc.status] || tc.status;
-  head.appendChild(status);
-
-  if (tc.status === 'running') {
-    const spinner = document.createElement('span');
-    spinner.className = 'tool-call__spinner';
-    head.appendChild(spinner);
+  if (typeof tc.step === 'number' && tc.step > 0) {
+    const step = document.createElement('span');
+    step.className = 'tool-call__step';
+    step.textContent = `第 ${tc.step} 步`;
+    head.appendChild(step);
   }
 
-  if (typeof tc.durationMs === 'number' && tc.status !== 'running') {
+  const statusLabel = document.createElement('span');
+  statusLabel.className = `tool-call__status tool-call__status--${status}`;
+  statusLabel.textContent = TOOL_STATUS_LABEL[status] || status;
+  head.appendChild(statusLabel);
+
+  if (typeof tc.durationMs === 'number' && status !== 'running') {
     const dur = document.createElement('span');
     dur.className = 'tool-call__duration';
     dur.textContent = `${tc.durationMs.toFixed(0)}ms`;
@@ -118,22 +188,304 @@ export function createToolCallCard(tc) {
 
   card.appendChild(head);
 
-  if (tc.status === 'error' && tc.error) {
+  if (status === 'error' && tc.error) {
     const err = document.createElement('div');
     err.className = 'tool-call__error';
     err.textContent = tc.error;
     card.appendChild(err);
   }
 
+  const args = formatArguments(tc.arguments);
+  if (args) {
+    card.appendChild(createDetails('参数', args, `${args.length} 字符`));
+  }
+
+  if (typeof tc.output === 'string' && tc.output.length) {
+    card.appendChild(createDetails('结果', tc.output, `${tc.output.length} 字符`));
+  } else if (status === 'done') {
+    const empty = document.createElement('div');
+    empty.className = 'tool-call__empty';
+    empty.textContent = '（无输出）';
+    card.appendChild(empty);
+  }
+
   return card;
 }
 
-export function createToolCallsEl(toolCalls) {
-  if (!Array.isArray(toolCalls) || !toolCalls.length) return null;
+/**
+ * 构建 Agent 执行过程：头部状态 + 工具调用卡片列表。
+ * options.state / options.step / options.maxSteps 用于展示当前阶段。
+ */
+export function createToolCallsEl(toolCalls, options = {}) {
+  const items = Array.isArray(toolCalls) ? toolCalls.filter(Boolean) : [];
+  const state = options.state;
+  const hasHeader = items.length > 0 || state === 'running';
+  if (!items.length && !hasHeader) return null;
+
   const wrap = document.createElement('div');
-  wrap.className = 'tool-calls';
-  toolCalls.forEach((tc) => wrap.appendChild(createToolCallCard(tc)));
+  wrap.className = 'agent-trace';
+
+  if (hasHeader) {
+    const head = document.createElement('div');
+    head.className = `agent-trace__head agent-trace__head--${state || 'idle'}`;
+
+    const badge = document.createElement('span');
+    badge.className = 'agent-trace__icon';
+    badge.appendChild(icon('spark'));
+    head.appendChild(badge);
+
+    const title = document.createElement('span');
+    title.className = 'agent-trace__title';
+    title.textContent = 'Agent 执行过程';
+    head.appendChild(title);
+
+    const step = Number(options.step) || 0;
+    const maxSteps = Number(options.maxSteps) || 0;
+    let statusText = AGENT_STATE_LABEL[state] || '';
+    if (state === 'running') {
+      statusText = step
+        ? `第 ${step}${maxSteps ? ` / ${maxSteps}` : ''} 步 · 执行中`
+        : '执行中';
+    } else if (state === 'done' && step) {
+      statusText = `已完成 · 共 ${step} 步`;
+    } else if (state === 'max_steps' && maxSteps) {
+      statusText = `达到最大步数（${maxSteps}）`;
+    }
+    if (statusText) {
+      const stateEl = document.createElement('span');
+      stateEl.className = 'agent-trace__state';
+      stateEl.textContent = statusText;
+      head.appendChild(stateEl);
+    }
+
+    wrap.appendChild(head);
+  }
+
+  if (items.length) {
+    const list = document.createElement('div');
+    list.className = 'tool-calls';
+    items.forEach((tc) => list.appendChild(createToolCallCard(tc)));
+    wrap.appendChild(list);
+  }
+
   return wrap;
+}
+
+/* --------------------------------------------------------------------------
+   权限确认卡片（Agent 高风险操作）
+
+   展示“Agent 请求执行 XXX”，提供 Allow once / Allow for this Run / Deny。
+   已处理（granted / denied / timeout）后只展示结果，不再提供按钮。
+   -------------------------------------------------------------------------- */
+
+const PERMISSION_RISK_LABEL = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+};
+
+const PERMISSION_STATUS_LABEL = {
+  pending: '等待确认',
+  granted: '已允许',
+  denied: '已拒绝',
+  timeout: '已超时',
+};
+
+export function createPermissionCard(request, onResolve) {
+  const status = request.status || 'pending';
+  const card = document.createElement('div');
+  card.className = `perm-card perm-card--${status}`;
+  card.dataset.requestId = request.id;
+
+  const head = document.createElement('div');
+  head.className = 'perm-card__head';
+
+  const stateIcon = document.createElement('span');
+  stateIcon.className = 'perm-card__icon';
+  stateIcon.appendChild(icon(status === 'granted' ? 'check' : 'shield'));
+  head.appendChild(stateIcon);
+
+  const title = document.createElement('span');
+  title.className = 'perm-card__title';
+  title.textContent = request.title || `Agent 请求执行 ${request.tool || '工具'}`;
+  head.appendChild(title);
+
+  const risk = PERMISSION_RISK_LABEL[request.risk];
+  if (risk) {
+    const riskEl = document.createElement('span');
+    riskEl.className = `perm-card__risk perm-card__risk--${request.risk}`;
+    riskEl.textContent = risk;
+    head.appendChild(riskEl);
+  }
+
+  const statusEl = document.createElement('span');
+  statusEl.className = `perm-card__status perm-card__status--${status}`;
+  statusEl.textContent = PERMISSION_STATUS_LABEL[status] || status;
+  head.appendChild(statusEl);
+
+  card.appendChild(head);
+
+  const meta = document.createElement('div');
+  meta.className = 'perm-card__meta';
+  const permCode = document.createElement('code');
+  permCode.textContent = request.permission || '';
+  meta.append('权限：', permCode);
+  if (request.tool) {
+    const toolCode = document.createElement('code');
+    toolCode.textContent = request.tool;
+    meta.append(' · 工具：', toolCode);
+  }
+  card.appendChild(meta);
+
+  if (request.detail) {
+    const detail = document.createElement('pre');
+    detail.className = 'perm-card__detail';
+    detail.textContent = request.detail;
+    card.appendChild(detail);
+  }
+
+  if (status === 'pending' && typeof onResolve === 'function') {
+    const actions = document.createElement('div');
+    actions.className = 'perm-card__actions';
+    [
+      ['once', '仅本次允许', 'primary'],
+      ['run', '本次 Run 允许', ''],
+      ['deny', '拒绝', 'danger'],
+    ].forEach(([decision, label, variant]) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `perm-btn${variant ? ` perm-btn--${variant}` : ''}`;
+      btn.textContent = label;
+      btn.addEventListener('click', () => {
+        actions.querySelectorAll('button').forEach((item) => {
+          item.disabled = true;
+        });
+        onResolve(request.id, decision);
+      });
+      actions.appendChild(btn);
+    });
+    card.appendChild(actions);
+  }
+
+  return card;
+}
+
+export function createPermissionRequestsEl(requests, onResolve) {
+  const items = Array.isArray(requests) ? requests.filter(Boolean) : [];
+  if (!items.length) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'perm-requests';
+  items.forEach((req) => wrap.appendChild(createPermissionCard(req, onResolve)));
+  return wrap;
+}
+
+/* --------------------------------------------------------------------------
+   图片附件展示（消息内 / 输入框预览）
+   -------------------------------------------------------------------------- */
+
+/**
+ * 构建图片网格。
+ * options.variant：'message'（消息内）| 'composer'（输入框预览，更小）
+ * options.onRemove：传入后为每张图片显示移除按钮
+ */
+export function createImageGrid(attachments, options = {}) {
+  const items = Array.isArray(attachments)
+    ? attachments.filter((item) => item && typeof item.dataUrl === 'string')
+    : [];
+  if (!items.length) return null;
+
+  const variant = options.variant === 'composer' ? 'composer' : 'message';
+  const grid = document.createElement('div');
+  grid.className = `media-grid media-grid--${variant}`;
+  grid.dataset.count = String(items.length);
+
+  items.forEach((attachment) => {
+    const tile = document.createElement('figure');
+    tile.className = 'media-tile';
+
+    const image = document.createElement('img');
+    image.src = attachment.dataUrl;
+    image.alt = attachment.name || '图片';
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    tile.appendChild(image);
+
+    if (typeof options.onRemove === 'function') {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'media-tile__remove';
+      remove.setAttribute('aria-label', `移除图片：${attachment.name || 'image'}`);
+      remove.appendChild(icon('close'));
+      remove.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        options.onRemove(attachment);
+      });
+      tile.appendChild(remove);
+    }
+
+    grid.appendChild(tile);
+  });
+
+  return grid;
+}
+
+/**
+ * 构建文件附件列表。
+ * options.onRemove：传入后为每个文件显示移除按钮。
+ */
+export function createFileList(files, options = {}) {
+  const items = Array.isArray(files)
+    ? files.filter((file) => file && typeof file.name === 'string')
+    : [];
+  if (!items.length) return null;
+
+  const list = document.createElement('div');
+  list.className = 'file-list';
+
+  items.forEach((file) => {
+    const chip = document.createElement('div');
+    chip.className = 'file-chip';
+    chip.title = file.name;
+
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'file-chip__icon';
+    iconWrap.appendChild(icon('file'));
+    chip.appendChild(iconWrap);
+
+    const meta = document.createElement('span');
+    meta.className = 'file-chip__meta';
+
+    const name = document.createElement('span');
+    name.className = 'file-chip__name';
+    name.textContent = file.name;
+    meta.appendChild(name);
+
+    const size = document.createElement('span');
+    size.className = 'file-chip__size';
+    size.textContent = formatBytes(file.size) || '文件';
+    meta.appendChild(size);
+
+    chip.appendChild(meta);
+
+    if (typeof options.onRemove === 'function') {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'file-chip__remove';
+      remove.setAttribute('aria-label', `移除文件：${file.name}`);
+      remove.appendChild(icon('close'));
+      remove.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        options.onRemove(file);
+      });
+      chip.appendChild(remove);
+    }
+
+    list.appendChild(chip);
+  });
+
+  return list;
 }
 
 /* --------------------------------------------------------------------------
@@ -214,10 +566,18 @@ export function createMessageEl(message, options = {}) {
     content.className = 'msg__content';
 
     // Agent 工具调用卡片（在正文之前）
-    if (message.toolCalls && message.toolCalls.length) {
-      const toolCallsEl = createToolCallsEl(message.toolCalls);
-      if (toolCallsEl) content.appendChild(toolCallsEl);
-    }
+    const toolCallsEl = createToolCallsEl(message.toolCalls, {
+      state: message.agentState,
+      step: message.agentStep,
+      maxSteps: message.agentMaxSteps,
+    });
+    if (toolCallsEl) content.appendChild(toolCallsEl);
+
+    const permissionEl = createPermissionRequestsEl(
+      message.permissionRequests,
+      options.onResolvePermission,
+    );
+    if (permissionEl) content.appendChild(permissionEl);
 
     if (message.content) {
       const prose = createProse(message.content);
@@ -228,7 +588,9 @@ export function createMessageEl(message, options = {}) {
     } else if (message.stopped) {
       const note = document.createElement('p');
       note.className = 'msg__note';
-      note.textContent = '已停止生成。';
+      note.textContent = message.interrupted
+        ? '该回复已中断（页面刷新或网络断开），可重新生成。'
+        : '已停止生成。';
       content.appendChild(note);
     } else {
       content.appendChild(typingEl());
@@ -242,7 +604,22 @@ export function createMessageEl(message, options = {}) {
   } else {
     const bubble = document.createElement('div');
     bubble.className = 'msg__bubble';
-    bubble.textContent = message.content;
+
+    const media = createImageGrid(message.attachments);
+    const fileList = createFileList(message.files);
+    if (media || fileList) {
+      bubble.classList.add('msg__bubble--media');
+      if (media) bubble.appendChild(media);
+      if (fileList) bubble.appendChild(fileList);
+    }
+
+    if (message.content) {
+      const text = document.createElement('div');
+      text.className = 'msg__text';
+      text.textContent = message.content;
+      bubble.appendChild(text);
+    }
+
     body.appendChild(bubble);
   }
 

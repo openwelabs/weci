@@ -45,8 +45,11 @@
     <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
     <symbol id="i-panel-left" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></symbol>
     <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2.5L4.5 13.5H11L10 21.5l8.5-11H12l1-8z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.2-2.9 7.6-7 9.5-4.1-1.9-7-5.3-7-9.5V6l7-3z"/><path d="M9 12l2 2 4-4"/></symbol>
     <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></symbol>
     <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="3"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M4.5 17l4.5-4.5L13 17l3-3 3.5 3.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9A2.5 2.5 0 0 0 19 18.5V8l-5-5z"/><path d="M14 3v4.5A1.5 1.5 0 0 0 15.5 9H19"/><path d="M8.5 13h7M8.5 16.5h5"/></symbol>
   </svg>
 
   <div class="app" id="app">
@@ -57,7 +60,7 @@
             <svg viewBox="0 0 24 24"><path d="M4 14.5c2.6 0 2.6-6 5.3-6s2.6 6 5.3 6 2.6-6 5.4-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
           </span>
           <span class="brand__name">WeCi</span>
-          <span class="brand__tag">v0.3</span>
+          <span class="brand__tag">v0.14</span>
         </a>
         <div class="sidebar__brand-actions">
           <button class="icon-btn sidebar__collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" title="收起侧栏">
@@ -79,6 +82,14 @@
       <nav class="history" id="historyList" aria-label="历史会话"></nav>
 
       <div class="sidebar__footer">
+        <button class="side-action" id="providersBtn" type="button">
+          <svg class="icon" viewBox="0 0 24 24"><use href="#i-cpu"/></svg>
+          <span>Provider 管理</span>
+        </button>
+        <button class="side-action" id="permissionsBtn" type="button">
+          <svg class="icon" viewBox="0 0 24 24"><use href="#i-shield"/></svg>
+          <span>权限与安全</span>
+        </button>
         <button class="side-action" id="settingsBtn" type="button">
           <svg class="icon" viewBox="0 0 24 24"><use href="#i-settings"/></svg>
           <span>设置</span>
@@ -126,8 +137,17 @@
             <svg class="icon i-moon" viewBox="0 0 24 24"><use href="#i-moon"/></svg>
             <svg class="icon i-sun" viewBox="0 0 24 24"><use href="#i-sun"/></svg>
           </button>
+          <button class="icon-btn" id="topMemoryBtn" type="button" aria-label="长期记忆" title="长期记忆">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-spark"/></svg>
+          </button>
+          <button class="icon-btn" id="topMcpBtn" type="button" aria-label="MCP Server" title="MCP Server">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-cpu"/></svg>
+          </button>
           <button class="icon-btn" id="topPluginsBtn" type="button" aria-label="插件管理" title="插件管理">
             <svg class="icon" viewBox="0 0 24 24"><use href="#i-puzzle"/></svg>
+          </button>
+          <button class="icon-btn" id="topPermissionsBtn" type="button" aria-label="权限与安全" title="权限与安全">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-shield"/></svg>
           </button>
           <button class="icon-btn" id="topSettingsBtn" type="button" aria-label="打开设置">
             <svg class="icon" viewBox="0 0 24 24"><use href="#i-settings"/></svg>
@@ -174,14 +194,24 @@
           </div>
           <div class="messages" id="messages"></div>
         </div>
+        <aside class="run-history" id="runHistoryPanel" hidden aria-label="Agent 执行历史"></aside>
       </section>
 
       <div class="composer-wrap">
         <form class="composer" id="composerForm" autocomplete="off">
+          <div class="attach-strip" id="attachStrip" hidden></div>
           <label class="sr-only" for="input">发送给 WeCi 的消息</label>
           <textarea id="input" rows="1" placeholder="给 WeCi 发消息…" enterkeyhint="send"></textarea>
           <div class="composer__bar">
-            <span class="composer__hint" id="composerHint">Enter 发送 · Shift + Enter 换行</span>
+            <div class="composer__tools">
+              <button class="icon-btn composer__attach" id="attachBtn" type="button" aria-label="添加图片" title="添加图片（也可以拖拽图片到输入框）">
+                <svg class="icon" viewBox="0 0 24 24"><use href="#i-image"/></svg>
+              </button>
+              <button class="icon-btn composer__attach" id="fileBtn" type="button" aria-label="添加文件" title="添加文件：txt / md / json / csv / py / js / ts / html / css / pdf">
+                <svg class="icon" viewBox="0 0 24 24"><use href="#i-file"/></svg>
+              </button>
+              <span class="composer__hint" id="composerHint">Enter 发送 · Shift + Enter 换行</span>
+            </div>
             <div class="composer__buttons">
               <button class="send-btn" id="sendBtn" type="submit" aria-label="发送消息" disabled>
                 <svg class="icon" viewBox="0 0 24 24"><use href="#i-arrow-up"/></svg>
@@ -192,6 +222,8 @@
               </button>
             </div>
           </div>
+          <input class="sr-only" id="fileInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+          <input class="sr-only" id="docInput" type="file" accept=".txt,.md,.json,.csv,.py,.js,.ts,.html,.css,.pdf" multiple>
         </form>
         <p class="composer__footnote">WeCi 可能会出错，请核对重要信息。</p>
       </div>
@@ -224,6 +256,283 @@
           </div>
         </div>
       </section>
+
+      <section class="plugins-page memory-page" id="memoryPage" hidden aria-label="长期记忆">
+        <header class="plugins-page__head">
+          <button class="icon-btn plugins-page__back" id="memoryBackBtn" type="button" aria-label="返回对话">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+          </button>
+          <div class="plugins-page__titles">
+            <h2 class="plugins-page__title">长期记忆</h2>
+            <p class="plugins-page__sub">你明确要求记住的信息，会用于之后的对话</p>
+          </div>
+          <button class="ghost-btn plugins-page__refresh" id="memoryRefreshBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>
+            <span>刷新</span>
+          </button>
+        </header>
+
+        <div class="plugins-page__body">
+          <div class="memory-note">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-alert"/></svg>
+            <p>Memory 只保存你主动要求记住的少量信息，不会自动记录聊天内容。你可以随时在这里修改或删除。</p>
+          </div>
+
+          <form class="memory-form" id="memoryForm" autocomplete="off">
+            <div class="memory-form__row">
+              <label class="memory-form__field">
+                <span>标识（key）</span>
+                <input id="memoryKey" type="text" maxlength="64" placeholder="例如 operating_system" required>
+              </label>
+              <label class="memory-form__field">
+                <span>范围</span>
+                <select id="memoryScope">
+                  <option value="user">用户（跨会话）</option>
+                  <option value="conversation">当前会话</option>
+                </select>
+              </label>
+            </div>
+            <label class="memory-form__field">
+              <span>内容</span>
+              <input id="memoryContent" type="text" maxlength="500" placeholder="例如 Fedora" required>
+            </label>
+            <div class="memory-form__actions">
+              <span class="plugins__hint" id="memoryScopeHint"></span>
+              <button class="ghost-btn" type="submit">保存记忆</button>
+            </div>
+          </form>
+
+          <div class="plugins__list" id="memoryList">
+            <p class="plugins__empty">正在加载记忆…</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="plugins-page mcp-page" id="mcpPage" hidden aria-label="MCP Server">
+        <header class="plugins-page__head">
+          <button class="icon-btn plugins-page__back" id="mcpBackBtn" type="button" aria-label="返回对话">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+          </button>
+          <div class="plugins-page__titles">
+            <h2 class="plugins-page__title">MCP Server</h2>
+            <p class="plugins-page__sub">连接本地 MCP Server，把其工具交给 Agent</p>
+          </div>
+          <button class="ghost-btn plugins-page__refresh" id="mcpRefreshBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>
+            <span>刷新</span>
+          </button>
+        </header>
+
+        <div class="plugins-page__body">
+          <div class="plugins__trust">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-alert"/></svg>
+            <p>MCP Server 是本地命令，WeCi 会以子进程方式启动它。请只添加你信任的 Server；第一阶段仅支持 stdio，<strong>不提供沙箱隔离</strong>。</p>
+          </div>
+
+          <form class="memory-form mcp-form" id="mcpForm" autocomplete="off">
+            <input type="hidden" id="mcpEditId">
+            <div class="memory-form__row">
+              <label class="memory-form__field">
+                <span>名称</span>
+                <input id="mcpName" type="text" maxlength="64" placeholder="例如 filesystem" required>
+              </label>
+              <label class="memory-form__field">
+                <span>命令</span>
+                <input id="mcpCommand" type="text" maxlength="512" placeholder="例如 npx 或 python3" spellcheck="false" required>
+              </label>
+            </div>
+            <label class="memory-form__field">
+              <span>参数（每行一个）</span>
+              <textarea id="mcpArgs" class="mcp-form__area" rows="2" placeholder="-y&#10;@modelcontextprotocol/server-filesystem&#10;/tmp" spellcheck="false"></textarea>
+            </label>
+            <label class="memory-form__field">
+              <span>环境变量（KEY=VALUE，每行一个）</span>
+              <textarea id="mcpEnv" class="mcp-form__area" rows="2" placeholder="API_KEY=..." spellcheck="false"></textarea>
+            </label>
+            <div class="memory-form__actions">
+              <span class="plugins__hint" id="mcpFormHint">保存后会立即尝试连接。</span>
+              <button class="ghost-btn" id="mcpCancelEditBtn" type="button" hidden>取消编辑</button>
+              <button class="ghost-btn" id="mcpSubmitBtn" type="submit">添加并连接</button>
+            </div>
+          </form>
+
+          <div class="plugins__list" id="mcpList">
+            <p class="plugins__empty">正在加载 MCP Server…</p>
+          </div>
+        </div>
+      </section>
+      <section class="plugins-page providers-page" id="providersPage" hidden aria-label="Provider 管理">
+        <header class="plugins-page__head">
+          <button class="icon-btn plugins-page__back" id="providersBackBtn" type="button" aria-label="返回对话">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+          </button>
+          <div class="plugins-page__titles">
+            <h2 class="plugins-page__title">Provider 管理</h2>
+            <p class="plugins-page__sub">统一管理模型服务、模型与能力声明</p>
+          </div>
+          <button class="ghost-btn plugins-page__refresh" id="providersRefreshBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>
+            <span>刷新</span>
+          </button>
+        </header>
+
+        <div class="plugins-page__body">
+          <div class="memory-note">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-alert"/></svg>
+            <p>API Key 只保存在本机服务端 <code>.weci/providers.json</code>，浏览器不保存、也不会再次显示明文。编辑时 Key 留空表示不修改，填写新值则覆盖。</p>
+          </div>
+
+          <form class="memory-form provider-form" id="providerForm" autocomplete="off">
+            <input type="hidden" id="providerEditId">
+            <div class="memory-form__row">
+              <label class="memory-form__field">
+                <span>名称</span>
+                <input id="providerName" type="text" maxlength="64" placeholder="例如 OpenAI" required>
+              </label>
+              <label class="memory-form__field">
+                <span>Endpoint</span>
+                <input id="providerBase" type="url" maxlength="1024" placeholder="https://api.openai.com/v1" spellcheck="false" autocapitalize="off" required>
+              </label>
+            </div>
+            <div class="memory-form__row">
+              <label class="memory-form__field">
+                <span>API Key</span>
+                <input id="providerApiKey" type="password" maxlength="4096" placeholder="留空表示不修改" spellcheck="false" autocomplete="new-password">
+              </label>
+              <label class="memory-form__field">
+                <span>描述</span>
+                <input id="providerDescription" type="text" maxlength="200" placeholder="可选，例如 团队共享网关">
+              </label>
+            </div>
+            <div class="provider-form__flags">
+              <label class="provider-check">
+                <input id="providerEnabled" type="checkbox" checked>
+                <span>启用</span>
+              </label>
+              <label class="provider-check">
+                <input id="providerDefault" type="checkbox">
+                <span>设为默认 Provider</span>
+              </label>
+            </div>
+            <div class="memory-form__actions">
+              <span class="plugins__hint" id="providerFormHint">新增 Provider 后，还需要至少添加一个 Model。</span>
+              <button class="ghost-btn" id="providerCancelEditBtn" type="button" hidden>取消编辑</button>
+              <button class="ghost-btn" id="providerSubmitBtn" type="submit">添加 Provider</button>
+            </div>
+          </form>
+
+          <div class="plugins__list" id="providerList">
+            <p class="plugins__empty">正在加载 Provider…</p>
+          </div>
+
+          <form class="memory-form provider-model-form" id="providerModelForm" autocomplete="off" hidden>
+            <input type="hidden" id="modelEditId">
+            <div class="memory-form__row">
+              <label class="memory-form__field">
+                <span>所属 Provider</span>
+                <select id="modelProvider" required></select>
+              </label>
+              <label class="memory-form__field">
+                <span>模型名（请求使用的 id）</span>
+                <input id="modelId" type="text" maxlength="200" placeholder="例如 gpt-4o-mini" spellcheck="false" autocapitalize="off" required>
+              </label>
+            </div>
+            <div class="memory-form__row">
+              <label class="memory-form__field">
+                <span>展示名（可选）</span>
+                <input id="modelDisplayName" type="text" maxlength="120" placeholder="例如 GPT-4o mini">
+              </label>
+              <label class="memory-form__field">
+                <span>Context Window（可选）</span>
+                <input id="modelContextWindow" type="number" min="1024" max="2000000" step="1" inputmode="numeric" placeholder="例如 128000">
+              </label>
+            </div>
+            <div class="memory-form__row">
+              <label class="memory-form__field">
+                <span>Max Tokens（可选）</span>
+                <input id="modelMaxTokens" type="number" min="1" max="200000" step="1" inputmode="numeric" placeholder="留空则由服务端决定">
+              </label>
+              <div class="memory-form__field">
+                <span>能力</span>
+                <div class="provider-form__flags">
+                  <label class="provider-check"><input id="modelCapText" type="checkbox" checked><span>Text</span></label>
+                  <label class="provider-check"><input id="modelCapVision" type="checkbox" checked><span>Vision</span></label>
+                  <label class="provider-check"><input id="modelCapTools" type="checkbox" checked><span>Tool Calling</span></label>
+                  <label class="provider-check"><input id="modelCapStreaming" type="checkbox" checked><span>Streaming</span></label>
+                </div>
+              </div>
+            </div>
+            <div class="memory-form__actions">
+              <span class="plugins__hint" id="modelFormHint">能力声明会用于发送前预检，也会显示在模型菜单中。</span>
+              <button class="ghost-btn" id="modelCancelEditBtn" type="button" hidden>取消编辑</button>
+              <button class="ghost-btn" id="modelSubmitBtn" type="submit">添加 Model</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="plugins-page permissions-page" id="permissionsPage" hidden aria-label="权限与安全">
+        <header class="plugins-page__head">
+          <button class="icon-btn plugins-page__back" id="permissionsBackBtn" type="button" aria-label="返回对话">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-close"/></svg>
+          </button>
+          <div class="plugins-page__titles">
+            <h2 class="plugins-page__title">权限与安全</h2>
+            <p class="plugins-page__sub">内置工具、插件工具与 MCP 工具共用同一套授权机制</p>
+          </div>
+          <button class="ghost-btn plugins-page__refresh" id="permissionsRefreshBtn" type="button">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>
+            <span>刷新</span>
+          </button>
+        </header>
+
+        <div class="plugins-page__body">
+          <div class="plugins__trust">
+            <svg class="icon" viewBox="0 0 24 24"><use href="#i-shield"/></svg>
+            <p>WeCi 遵循 <strong>默认拒绝</strong> 与 <strong>最小权限</strong> 原则：未明确声明的权限默认禁止，高风险操作需要在对话中由你确认。所有安全日志均已脱敏。</p>
+          </div>
+
+          <div class="perm-overview" id="permOverview">
+            <p class="plugins__empty">正在加载权限状态…</p>
+          </div>
+
+          <section class="perm-section">
+            <div class="perm-section__head">
+              <h3>已授权限</h3>
+              <button class="ghost-btn" id="permResetAllBtn" type="button">重置全部</button>
+            </div>
+            <div class="perm-grants" id="permGrants">
+              <p class="plugins__empty">暂无授权记录</p>
+            </div>
+          </section>
+
+          <section class="perm-section">
+            <div class="perm-section__head">
+              <h3>权限目录</h3>
+              <span class="plugins__hint">Allow = 持久允许 · Deny = 持久拒绝</span>
+            </div>
+            <div class="perm-catalog" id="permCatalog"></div>
+          </section>
+
+          <section class="perm-section">
+            <div class="perm-section__head">
+              <h3>工具权限</h3>
+              <span class="plugins__hint">内置 / 插件 / MCP 工具统一注册</span>
+            </div>
+            <div class="perm-tools" id="permTools"></div>
+          </section>
+
+          <section class="perm-section">
+            <div class="perm-section__head">
+              <h3>安全日志</h3>
+              <span class="plugins__hint">不含 API Key / Token / Password</span>
+            </div>
+            <div class="perm-log" id="permLog">
+              <p class="plugins__empty">暂无安全事件</p>
+            </div>
+          </section>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -244,40 +553,70 @@
         <section class="settings__section">
           <h3 class="settings__heading">模型服务</h3>
           <label class="field">
-            <span class="field__label">API Endpoint</span>
-            <input id="settingEndpoint" type="url" placeholder="https://api.openai.com/v1" spellcheck="false" autocapitalize="off">
-            <span class="field__hint">兼容 OpenAI 协议的地址，可填到 <code>/v1</code> 或完整的 <code>/v1/chat/completions</code>。</span>
-          </label>
-          <label class="field">
             <span class="field__label">
-              API Key
-              <span class="badge" id="serverKeyBadge" hidden>服务端已配置</span>
+              Provider
+              <span class="badge" id="serverProviderBadge" hidden>服务端已配置</span>
             </span>
-            <span class="field__row">
-              <input id="settingApiKey" type="password" placeholder="sk-…" spellcheck="false" autocapitalize="off">
-              <button class="ghost-btn" id="toggleKeyBtn" type="button" aria-label="显示或隐藏 API Key">显示</button>
-            </span>
-            <span class="field__hint">云端服务必填，Ollama / LM Studio 等本地服务可留空。密钥仅保存在此浏览器 localStorage，经本地后端转发，不会写入源码或仓库。</span>
+            <select id="settingProvider" class="settings__select"></select>
+            <span class="field__hint" id="settingProviderHint">选择 Provider 后，Key 由服务端保存，浏览器不再传输 Key。</span>
           </label>
           <label class="field">
             <span class="field__label">Model</span>
-            <input id="settingModel" type="text" list="modelPresets" placeholder="gpt-4o-mini" spellcheck="false" autocapitalize="off">
-            <datalist id="modelPresets">
-              <option value="gpt-4o-mini"></option>
-              <option value="gpt-4o"></option>
-              <option value="gpt-4.1-mini"></option>
-              <option value="deepseek-chat"></option>
-              <option value="qwen-plus"></option>
-              <option value="llama3.1"></option>
-            </datalist>
+            <select id="settingProviderModel" class="settings__select" disabled></select>
+            <span class="field__hint" id="settingModelHint">Provider 的 Chat / Agent 模型可在 Provider 管理中配置。</span>
           </label>
+          <div class="settings__caps" id="settingCapabilities" hidden></div>
           <div class="settings__test">
-            <button class="ghost-btn" id="testConnBtn" type="button">
+            <button class="ghost-btn" id="testProviderBtn" type="button" hidden>
               <svg class="icon" viewBox="0 0 24 24"><use href="#i-zap"/></svg>
-              <span>测试连接</span>
+              <span>测试 Provider</span>
             </button>
-            <span class="settings__test-result" id="testConnResult" role="status"></span>
+            <button class="ghost-btn" id="openProvidersBtn" type="button">
+              <svg class="icon" viewBox="0 0 24 24"><use href="#i-cpu"/></svg>
+              <span>打开 Provider 管理</span>
+            </button>
+            <span class="settings__test-result" id="providerTestResult" role="status"></span>
           </div>
+          <details class="settings__compat" id="compatDetails">
+            <summary class="settings__compat-summary">兼容模式（旧版 Endpoint / Key / Model）</summary>
+            <div class="settings__compat-body">
+              <label class="field">
+                <span class="field__label">API Endpoint</span>
+                <input id="settingEndpoint" type="url" placeholder="https://api.openai.com/v1" spellcheck="false" autocapitalize="off">
+                <span class="field__hint">兼容 OpenAI 协议的地址，可填到 <code>/v1</code> 或完整的 <code>/v1/chat/completions</code>。</span>
+              </label>
+              <label class="field">
+                <span class="field__label">
+                  API Key
+                  <span class="badge" id="serverKeyBadge" hidden>服务端已配置</span>
+                </span>
+                <span class="field__row">
+                  <input id="settingApiKey" type="password" placeholder="sk-…" spellcheck="false" autocapitalize="off">
+                  <button class="ghost-btn" id="toggleKeyBtn" type="button" aria-label="显示或隐藏 API Key">显示</button>
+                </span>
+                <span class="field__hint">旧版兼容配置：密钥仅保存在此浏览器 localStorage。建议改用 Provider，把 Key 交给服务端保存。</span>
+              </label>
+              <label class="field">
+                <span class="field__label">Model</span>
+                <input id="settingModel" type="text" list="modelPresets" placeholder="gpt-4o-mini" spellcheck="false" autocapitalize="off">
+                <datalist id="modelPresets">
+                  <option value="gpt-4o-mini"></option>
+                  <option value="gpt-4o"></option>
+                  <option value="gpt-4.1-mini"></option>
+                  <option value="deepseek-chat"></option>
+                  <option value="qwen-plus"></option>
+                  <option value="llama3.1"></option>
+                </datalist>
+              </label>
+              <div class="settings__test">
+                <button class="ghost-btn" id="testConnBtn" type="button">
+                  <svg class="icon" viewBox="0 0 24 24"><use href="#i-zap"/></svg>
+                  <span>测试连接</span>
+                </button>
+                <span class="settings__test-result" id="testConnResult" role="status"></span>
+              </div>
+            </div>
+          </details>
           <label class="field">
             <span class="field__label">Temperature <output id="tempValue">0.7</output></span>
             <input id="settingTemperature" type="range" min="0" max="2" step="0.1" value="0.7">
@@ -300,6 +639,34 @@
             <button class="ghost-btn" id="settingsOpenPluginsBtn" type="button">
               <svg class="icon" viewBox="0 0 24 24"><use href="#i-puzzle"/></svg>
               <span>打开插件管理</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings__section">
+          <h3 class="settings__heading">记忆</h3>
+          <div class="settings__row">
+            <div>
+              <strong>长期记忆</strong>
+              <p>查看、修改或删除你让 WeCi 记住的信息。</p>
+            </div>
+            <button class="ghost-btn" id="settingsOpenMemoryBtn" type="button">
+              <svg class="icon" viewBox="0 0 24 24"><use href="#i-spark"/></svg>
+              <span>打开长期记忆</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings__section">
+          <h3 class="settings__heading">MCP</h3>
+          <div class="settings__row">
+            <div>
+              <strong>MCP Server</strong>
+              <p>连接本地 MCP Server，把其工具交给 Agent 使用。</p>
+            </div>
+            <button class="ghost-btn" id="settingsOpenMcpBtn" type="button">
+              <svg class="icon" viewBox="0 0 24 24"><use href="#i-cpu"/></svg>
+              <span>打开 MCP 管理</span>
             </button>
           </div>
         </section>

@@ -1,11 +1,17 @@
 {
   "id": "computer",
   "name": "Computer Control",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "让 Agent 操控本机：执行命令、读写文件、剪贴板。高风险插件，请谨慎启用。",
   "author": "WeCi",
   "api_version": "0.1",
   "entry": "plugin.py",
-  "permissions": ["process", "filesystem.read", "filesystem.write", "clipboard"],
+  "permissions": [
+    "process",
+    "filesystem.read",
+    "filesystem.write",
+    "workspace:delete",
+    "clipboard"
+  ],
   "default_enabled": true
 }

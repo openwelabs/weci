@@ -15,7 +15,14 @@
     当前支持 ``0.1``。Core 内部重构不会改变 SDK 公开 API。
 """
 
-from weci_sdk.context import FileCap, HttpCap, PluginContext, StorageCap, ToolContext
+from weci_sdk.context import (
+    FileCap,
+    HttpCap,
+    MemoryCap,
+    PluginContext,
+    StorageCap,
+    ToolContext,
+)
 from weci_sdk.permissions import (
     KNOWN_PERMISSIONS,
     PERMISSION_DESCRIPTIONS,
@@ -35,6 +42,7 @@ __all__ = [
     "HttpCap",
     "FileCap",
     "StorageCap",
+    "MemoryCap",
     "PermissionDenied",
     "PluginPermissionError",
     "KNOWN_PERMISSIONS",

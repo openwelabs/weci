@@ -55,16 +55,20 @@ export async function* streamChat({
   model,
   apiBase,
   apiKey,
+  providerId,
   temperature,
   maxTokens,
   mode = 'chat',
+  userId,
+  conversationId,
   signal,
 }) {
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
   };
-  if (apiKey) headers['X-WeCi-API-Key'] = apiKey;
+  // Provider 模式下 Key 保存在服务端，浏览器不发送任何 Key
+  if (apiKey && !providerId) headers['X-WeCi-API-Key'] = apiKey;
 
   const body = {
     messages,
@@ -73,7 +77,11 @@ export async function* streamChat({
     temperature,
     mode,
   };
+  if (providerId) body.provider_id = providerId;
   if (typeof maxTokens === 'number') body.max_tokens = maxTokens;
+  // Memory 隔离标识：user / workspace / conversation
+  if (userId) body.user_id = userId;
+  if (conversationId) body.conversation_id = conversationId;
 
   const response = await fetch('/api/chat', {
     method: 'POST',
@@ -142,6 +150,144 @@ export async function testConnection({ apiBase, model, apiKey }) {
 }
 
 /* --------------------------------------------------------------------------
+   Provider 管理
+
+   公开响应永远不包含 API Key，只包含 has_api_key。
+   更新时 api_key 省略（undefined）= 不修改，传 "" = 清除。
+   -------------------------------------------------------------------------- */
+
+function providerJsonOptions(method, body) {
+  return {
+    method,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  };
+}
+
+export async function fetchProviders() {
+  const response = await fetch('/api/providers', {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  const data = await response.json();
+  return Array.isArray(data.providers) ? data.providers : [];
+}
+
+export async function createProvider(payload) {
+  const response = await fetch(
+    '/api/providers',
+    providerJsonOptions('POST', payload),
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function updateProvider(providerId, patch) {
+  const response = await fetch(
+    `/api/providers/${encodeURIComponent(providerId)}`,
+    providerJsonOptions('PATCH', patch),
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function deleteProvider(providerId) {
+  const response = await fetch(`/api/providers/${encodeURIComponent(providerId)}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function createProviderModel(providerId, payload) {
+  const response = await fetch(
+    `/api/providers/${encodeURIComponent(providerId)}/models`,
+    providerJsonOptions('POST', payload),
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function updateProviderModel(providerId, modelId, patch) {
+  const response = await fetch(
+    `/api/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}`,
+    providerJsonOptions('PATCH', patch),
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function deleteProviderModel(providerId, modelId) {
+  const response = await fetch(
+    `/api/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}`,
+    { method: 'DELETE', headers: { Accept: 'application/json' } },
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+/** 测试 Provider。始终返回 200 + {ok,message,latency_ms,models,provider_id,...} */
+export async function testProvider(providerId, { model, apiKey } = {}) {
+  const payload = {};
+  if (model) payload.model = model;
+  if (apiKey) payload.api_key = apiKey;
+  const response = await fetch(
+    `/api/providers/${encodeURIComponent(providerId)}/test`,
+    providerJsonOptions('POST', payload),
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+/** 测试单个模型。始终返回 200 + {ok,message,latency_ms,...} */
+export async function testProviderModel(providerId, modelId, { apiKey } = {}) {
+  const payload = {};
+  if (apiKey) payload.api_key = apiKey;
+  const response = await fetch(
+    `/api/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}/test`,
+    providerJsonOptions('POST', payload),
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+/* --------------------------------------------------------------------------
+   Agent Run 管理
+   -------------------------------------------------------------------------- */
+
+/** 查询某个会话的 Agent Run 历史（按时间倒序）。 */
+export async function fetchRuns(conversationId, limit = 50) {
+  const response = await fetch(
+    `/api/agent/runs?conversation_id=${encodeURIComponent(conversationId)}&limit=${limit}`,
+    { headers: { Accept: 'application/json' } },
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  const data = await response.json();
+  return Array.isArray(data.runs) ? data.runs : [];
+}
+
+/** 查询单个 Run 的完整记录（含 tool_calls 与 events）。 */
+export async function fetchRun(runId) {
+  const response = await fetch(`/api/agent/runs/${encodeURIComponent(runId)}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  const data = await response.json();
+  return data.run || null;
+}
+
+/** 取消正在运行的 Run。返回 { ok, run_id, status }。 */
+export async function cancelRun(runId) {
+  const response = await fetch(`/api/agent/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+/* --------------------------------------------------------------------------
    插件管理
    -------------------------------------------------------------------------- */
 
@@ -177,4 +323,210 @@ export async function removePlugin(pluginId) {
   });
   if (!response.ok) throw new Error(await readErrorDetail(response));
   return response.json();
+}
+
+/* --------------------------------------------------------------------------
+   长期记忆（Memory）
+   -------------------------------------------------------------------------- */
+
+function memoryQuery({ userId, workspaceId, conversationId, scope }) {
+  const params = new URLSearchParams();
+  if (userId) params.set('user_id', userId);
+  if (workspaceId) params.set('workspace_id', workspaceId);
+  if (conversationId) params.set('conversation_id', conversationId);
+  if (scope) params.set('scope', scope);
+  return params.toString();
+}
+
+export async function fetchMemories(options = {}) {
+  const query = memoryQuery(options);
+  const response = await fetch(`/api/memories${query ? `?${query}` : ''}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  const data = await response.json();
+  return Array.isArray(data.memories) ? data.memories : [];
+}
+
+export async function createMemory({ key, content, scope, userId, workspaceId, conversationId }) {
+  const response = await fetch('/api/memories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      key,
+      content,
+      scope: scope || 'user',
+      user_id: userId || 'default',
+      workspace_id: workspaceId || '',
+      conversation_id: conversationId || '',
+    }),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function updateMemory(memoryId, { key, content }) {
+  const response = await fetch(`/api/memories/${encodeURIComponent(memoryId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ key, content }),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function deleteMemory(memoryId) {
+  const response = await fetch(`/api/memories/${encodeURIComponent(memoryId)}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+/* --------------------------------------------------------------------------
+   MCP Server
+   -------------------------------------------------------------------------- */
+
+export async function fetchMcpServers() {
+  const response = await fetch('/api/mcp/servers', {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  const data = await response.json();
+  return Array.isArray(data.servers) ? data.servers : [];
+}
+
+export async function createMcpServer({ name, command, args, env, enabled = true }) {
+  const response = await fetch('/api/mcp/servers', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ name, command, args: args || [], env: env || {}, enabled }),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function updateMcpServer(serverId, patch) {
+  const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function deleteMcpServer(serverId) {
+  const response = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function connectMcpServer(serverId) {
+  const response = await fetch(
+    `/api/mcp/servers/${encodeURIComponent(serverId)}/connect`,
+    { method: 'POST', headers: { Accept: 'application/json' } },
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function disconnectMcpServer(serverId) {
+  const response = await fetch(
+    `/api/mcp/servers/${encodeURIComponent(serverId)}/disconnect`,
+    { method: 'POST', headers: { Accept: 'application/json' } },
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+/* --------------------------------------------------------------------------
+   统一权限 / 安全（Permission Manager）
+
+   所有工具（内置 / 插件 / MCP）共用同一套授权；后端返回的数据已脱敏，
+   不含任何 API Key。
+   -------------------------------------------------------------------------- */
+
+export async function fetchPermissions() {
+  const response = await fetch('/api/permissions', {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function grantPermission({
+  principal = 'global',
+  permission,
+  scope = 'always',
+  runId = '',
+}) {
+  const body = { principal, permission, scope };
+  if (runId) body.run_id = runId;
+  const response = await fetch('/api/permissions/grant', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function denyPermission({ principal = 'global', permission }) {
+  const response = await fetch('/api/permissions/deny', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ principal, permission }),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function resetPermissions({ principal, permission } = {}) {
+  const body = {};
+  if (principal) body.principal = principal;
+  if (permission) body.permission = permission;
+  const response = await fetch('/api/permissions/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function fetchPermissionRequests() {
+  const response = await fetch('/api/permissions/requests', {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  const data = await response.json();
+  return Array.isArray(data.requests) ? data.requests : [];
+}
+
+/** 用户对权限请求的响应：once / run / deny。 */
+export async function resolvePermissionRequest(requestId, decision) {
+  const response = await fetch(
+    `/api/permissions/requests/${encodeURIComponent(requestId)}/resolve`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ decision }),
+    },
+  );
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function fetchSecurityLog(limit = 50) {
+  const response = await fetch(`/api/permissions/log?limit=${limit}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  const data = await response.json();
+  return Array.isArray(data.log) ? data.log : [];
 }

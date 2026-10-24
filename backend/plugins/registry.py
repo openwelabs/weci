@@ -148,7 +148,10 @@ class PluginRegistry:
     def register_tool(self, tool: Tool, plugin_id: str, context=None) -> None:
         if tool.name in self._tool_owner:
             raise ValueError(f"工具名冲突：{tool.name} 已由插件 {self._tool_owner[tool.name]} 注册")
-        self.tool_registry.register(tool, context)
+        # 插件工具同时以 plugin:<id> 与 tool:<name> 为主体接受权限判定
+        self.tool_registry.register(
+            tool, context, principals=[f"plugin:{plugin_id}", f"tool:{tool.name}"]
+        )
         self._tool_owner[tool.name] = plugin_id
         entry = self._plugins.get(plugin_id)
         if entry is not None and tool.name not in entry.tools:

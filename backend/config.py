@@ -56,7 +56,7 @@ class Settings:
     """运行期配置，来源于环境变量。"""
 
     app_name: str = "WeCi"
-    version: str = "0.5.0"
+    version: str = "0.14.0"
 
     host: str = _env("WECI_HOST", "127.0.0.1")
     port: int = _env_int("WECI_PORT", 8000)
@@ -79,6 +79,46 @@ class Settings:
     # 上游请求超时（秒）：连接 / 读取
     connect_timeout: float = _env_float("WECI_CONNECT_TIMEOUT", 10.0)
     read_timeout: float = _env_float("WECI_READ_TIMEOUT", 300.0)
+
+    # 多模态图片限制：单张大小 / 单条消息张数
+    max_image_bytes: int = _env_int("WECI_MAX_IMAGE_BYTES", 5 * 1024 * 1024)
+    max_images_per_message: int = _env_int("WECI_MAX_IMAGES_PER_MESSAGE", 4)
+
+    # 文件附件限制：单个文件大小 / 条数 / 提取后文本长度
+    max_file_bytes: int = _env_int("WECI_MAX_FILE_BYTES", 5 * 1024 * 1024)
+    max_files_per_message: int = _env_int("WECI_MAX_FILES_PER_MESSAGE", 4)
+    max_file_text_chars: int = _env_int("WECI_MAX_FILE_TEXT_CHARS", 100_000)
+
+    # Context Manager：模型上下文预算与压缩策略
+    # 上下文窗口（tokens）；具体模型会在该值基础上取更保守的已知上限
+    context_window_tokens: int = _env_int("WECI_CONTEXT_WINDOW_TOKENS", 128_000)
+    # 预留给模型输出的 tokens（默认值；请求里显式 max_tokens 时以请求为准）
+    context_reserve_tokens: int = _env_int("WECI_CONTEXT_RESERVE_TOKENS", 4_096)
+    # 无论是否压缩，都尽量保留的最近消息条数
+    context_min_recent_messages: int = _env_int("WECI_CONTEXT_MIN_RECENT_MESSAGES", 6)
+    # 单张图片在预算中的估算 tokens（无需下载即可估算）
+    context_image_tokens: int = _env_int("WECI_CONTEXT_IMAGE_TOKENS", 1_000)
+    # Workspace 文本注入上限（字符），避免工作区内容挤占对话空间
+    context_workspace_max_chars: int = _env_int("WECI_CONTEXT_WORKSPACE_MAX_CHARS", 20_000)
+    # 单次请求最多注入多少条 Memory，以及注入文本的字符上限
+    context_memory_max_items: int = _env_int("WECI_CONTEXT_MEMORY_MAX_ITEMS", 20)
+    context_memory_max_chars: int = _env_int("WECI_CONTEXT_MEMORY_MAX_CHARS", 4_000)
+
+    # Memory：每个 scope 的条数上限与单条内容长度上限（默认不无限增长）
+    memory_max_per_scope: int = _env_int("WECI_MEMORY_MAX_PER_SCOPE", 50)
+    memory_max_content_chars: int = _env_int("WECI_MEMORY_MAX_CONTENT_CHARS", 500)
+
+    # MCP：本地 stdio Server 的连接 / 调用超时（秒）
+    mcp_connect_timeout: float = _env_float("WECI_MCP_CONNECT_TIMEOUT", 20.0)
+    mcp_call_timeout: float = _env_float("WECI_MCP_CALL_TIMEOUT", 120.0)
+
+    # Workspace 安全边界：所有文件读写都必须落在这个 Root 之内
+    workspace_root: str = _env("WECI_WORKSPACE_ROOT", str(PROJECT_DIR))
+    # 权限确认等待上限（秒）；超时按默认拒绝处理
+    permission_confirm_timeout: float = _env_float("WECI_PERMISSION_CONFIRM_TIMEOUT", 120.0)
+    # 命令执行的默认超时与输出保留上限
+    command_default_timeout: float = _env_float("WECI_COMMAND_TIMEOUT", 30.0)
+    command_max_output_chars: int = _env_int("WECI_COMMAND_MAX_OUTPUT_CHARS", 20_000)
 
     cors_origins: tuple[str, ...] = _env_origins()
 

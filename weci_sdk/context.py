@@ -38,19 +38,26 @@ class HttpCap(ABC):
 
 
 class FileCap(ABC):
-    """文件系统能力子命名空间。"""
+    """文件系统能力子命名空间。
+
+    所有路径都会被限制在 Workspace Root 之内（禁止 ``..`` 逃逸与符号链接越界）。
+    """
 
     @abstractmethod
     def read(self, path: str) -> str:
-        """读取文本文件。需 ``filesystem.read`` 权限。"""
+        """读取文本文件。需 ``filesystem.read`` / ``workspace:read`` 权限。"""
 
     @abstractmethod
     def write(self, path: str, content: str) -> None:
-        """写入文本文件（覆盖）。需 ``filesystem.write`` 权限。"""
+        """写入文本文件（覆盖）。需 ``filesystem.write`` / ``workspace:write`` 权限。"""
 
     @abstractmethod
     def list_dir(self, path: str) -> list[dict[str, Any]]:
-        """列出目录内容。需 ``filesystem.read`` 权限。"""
+        """列出目录内容。需 ``filesystem.read`` / ``workspace:read`` 权限。"""
+
+    @abstractmethod
+    def delete(self, path: str) -> bool:
+        """删除文件。需 ``workspace:delete`` 权限（删除永远比写入更危险）。"""
 
 
 class StorageCap(ABC):
@@ -63,6 +70,28 @@ class StorageCap(ABC):
     @abstractmethod
     def set(self, key: str, value: Any) -> None:
         ...
+
+
+class MemoryCap(ABC):
+    """插件可用的长期记忆（Memory）能力。需 ``memory`` 权限。
+
+    Memory 属于 WeCi Core 的用户数据，不是插件私有存储：
+      - ``scope`` 决定这条记忆归属哪个用户 / Workspace / 会话
+      - Core 会根据当前请求自动解析对应的 ``scope_id``
+      - 只有用户在对话中明确要求时才应写入，不得自动保存聊天内容
+    """
+
+    @abstractmethod
+    def save(self, key: str, content: str, *, scope: str = "user") -> dict[str, Any]:
+        """创建或更新一条 Memory，返回其字段。"""
+
+    @abstractmethod
+    def delete(self, key: str, *, scope: str = "user") -> bool:
+        """按 key 删除一条 Memory；不存在返回 False。"""
+
+    @abstractmethod
+    def list(self, *, scope: str = "user") -> list[dict[str, Any]]:
+        """列出当前 scope 下的 Memory。"""
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +150,20 @@ class ToolContext(ABC):
     def storage_set(self, key: str, value: Any) -> None:
         ...
 
+    # -- 长期记忆（memory）--
+    @property
+    @abstractmethod
+    def memory(self) -> MemoryCap:
+        ...
+
+    @abstractmethod
+    def memory_save(self, key: str, content: str, *, scope: str = "user") -> dict[str, Any]:
+        ...
+
+    @abstractmethod
+    def memory_delete(self, key: str, *, scope: str = "user") -> bool:
+        ...
+
     # -- 文件系统（filesystem.read / filesystem.write）--
     @property
     @abstractmethod
@@ -138,6 +181,10 @@ class ToolContext(ABC):
     @abstractmethod
     def list_dir(self, path: str) -> list[dict[str, Any]]:
         ...
+
+    @abstractmethod
+    def delete_file(self, path: str) -> bool:
+        """删除 Workspace 内的文件。需 ``workspace:delete`` 权限。"""
 
     # -- 进程（process）--
     @abstractmethod
@@ -180,4 +227,11 @@ class PluginContext(ToolContext):
     """
 
 
-__all__ = ["PluginContext", "ToolContext", "HttpCap", "FileCap", "StorageCap"]
+__all__ = [
+    "PluginContext",
+    "ToolContext",
+    "HttpCap",
+    "FileCap",
+    "StorageCap",
+    "MemoryCap",
+]
