@@ -119,6 +119,13 @@ class Tool(ABC):
     # **Default Deny**：声明了但未授权的权限一律拒绝执行。
     permissions: tuple[str, ...] = ()
 
+    # 可选的工具风险等级，供 Security Policy Manager 决定是否需要用户确认：
+    #   - "safe"      普通只读操作，Auto Review 下自动执行
+    #   - "dangerous" 删除 / 写入 / 外部执行等，需要确认
+    #   - None        未声明，交给 Permission Manager 按权限风险判定
+    # ``run_command`` 不使用此字段，其风险由命令内容动态分析。
+    risk: str | None = None
+
     # ------------------------------------------------------------------
     # Schema
     # ------------------------------------------------------------------

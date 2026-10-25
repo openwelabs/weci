@@ -52,6 +52,8 @@ import {
   resetPermissions,
   resolvePermissionRequest,
   fetchSecurityLog,
+  fetchSecurity,
+  setSecurityMode,
   fetchPlugins,
   enablePlugin,
   disablePlugin,
@@ -228,6 +230,8 @@ const dom = {
   permissionsPage: document.getElementById('permissionsPage'),
   permissionsBackBtn: document.getElementById('permissionsBackBtn'),
   permissionsRefreshBtn: document.getElementById('permissionsRefreshBtn'),
+  securityModes: document.getElementById('securityModes'),
+  securityModeNote: document.getElementById('securityModeNote'),
   permOverview: document.getElementById('permOverview'),
   permGrants: document.getElementById('permGrants'),
   permCatalog: document.getElementById('permCatalog'),
@@ -295,8 +299,7 @@ function updateAssistantNode(message, streaming) {
   if (existingTrace) existingTrace.remove();
   const toolCallsEl = createToolCallsEl(message.toolCalls, {
     state: message.agentState,
-    step: message.agentStep,
-    maxSteps: message.agentMaxSteps,
+    durationMs: message.agentDurationMs,
   });
   if (toolCallsEl) content.insertBefore(toolCallsEl, content.firstChild);
 
@@ -695,10 +698,27 @@ async function renderRunDetail(container, run) {
             confirmation ? ` · ${escapeHtml(confirmation)}` : ''
           }</div>`
         : '';
+      // 命令执行审计：模式 / 风险 / 原因 / cwd / exitCode
+      const securityParts = [];
+      if (tc.security_mode) securityParts.push(`模式：${tc.security_mode}`);
+      if (tc.risk) securityParts.push(`风险：${tc.risk === 'dangerous' ? '高' : '安全'}`);
+      if (tc.confirmation_required != null) {
+        securityParts.push(`需确认：${tc.confirmation_required ? '是' : '否'}`);
+      }
+      if (tc.cwd) securityParts.push(`cwd：${escapeHtml(tc.cwd)}`);
+      if (typeof tc.exit_code === 'number') securityParts.push(`exitCode：${tc.exit_code}`);
+      if (tc.timed_out) securityParts.push('已超时');
+      const securityLine = securityParts.length
+        ? `<div class="run-tool-security">${securityParts.join(' · ')}${
+            tc.risk_reason ? ` · 原因：${escapeHtml(tc.risk_reason)}` : ''
+          }</div>`
+        : '';
       blocks.push(`
         <div class="run-tool run-tool--${tc.status}">
           <div class="run-tool-head"><b>${escapeHtml(tc.name)}</b> <span>${escapeHtml(statusText)}</span> · 步骤 ${tc.step ?? '—'}${typeof tc.duration_ms === 'number' ? ` · ${Math.round(tc.duration_ms)}ms` : ''}</div>
+          ${securityLine}
           ${permissionLine}
+          ${tc.command ? `<pre class="run-tool-command">${escapeHtml(tc.command)}</pre>` : ''}
           ${args ? `<pre class="run-tool-args">${escapeHtml(args)}</pre>` : ''}
           ${tc.output ? `<pre class="run-tool-output">${escapeHtml(tc.output)}</pre>` : ''}
           ${tc.error ? `<div class="run-tool-error">${escapeHtml(tc.error)}</div>` : ''}
@@ -1240,7 +1260,8 @@ async function streamReply(conversation, assistant) {
   if (mode === 'agent') {
     assistant.agentState = 'running';
     assistant.agentStep = 0;
-    assistant.agentMaxSteps = 0;
+    assistant.agentStartedAt = Date.now();
+    assistant.agentDurationMs = null;
   }
 
   const token = ++state.streamToken;
@@ -1270,6 +1291,15 @@ async function streamReply(conversation, assistant) {
         tc.error = tc.error || reason;
       }
     });
+  };
+
+  /** Agent 执行结束后冻结耗时（仅统计信息，不作为停止条件）。 */
+  const settleAgentDuration = () => {
+    if (mode !== 'agent') return;
+    const startedAt = Number(assistant.agentStartedAt);
+    if (Number.isFinite(startedAt) && startedAt > 0) {
+      assistant.agentDurationMs = Math.max(0, Date.now() - startedAt);
+    }
   };
 
   try {
@@ -1304,11 +1334,8 @@ async function streamReply(conversation, assistant) {
         scheduleSave();
       } else if (event.type === 'thinking') {
         if (typeof event.step === 'number') assistant.agentStep = event.step;
-        if (typeof event.max_steps === 'number') {
-          assistant.agentMaxSteps = event.max_steps;
-        }
         if (mode === 'agent') assistant.agentState = 'running';
-        state.agentStatus = `Agent 正在思考…（第 ${event.step} 步）`;
+        state.agentStatus = 'Agent 正在思考…';
         dom.composerHint.textContent = state.agentStatus;
         updateAssistantNode(assistant, Boolean(assistant.content));
         scrollToBottomIfStuck();
@@ -1326,9 +1353,6 @@ async function streamReply(conversation, assistant) {
         if (event.arguments !== undefined) tc.arguments = event.arguments;
         upsertToolCall(tc);
         if (typeof event.step === 'number') assistant.agentStep = event.step;
-        if (typeof event.max_steps === 'number') {
-          assistant.agentMaxSteps = event.max_steps;
-        }
         if (mode === 'agent') assistant.agentState = 'running';
         if (event.status === 'running') {
           state.agentStatus = `正在调用 ${event.name}…`;
@@ -1347,6 +1371,11 @@ async function streamReply(conversation, assistant) {
           title: event.title || '',
           detail: event.detail || '',
           risk: event.risk || 'high',
+          kind: event.kind || 'permission',
+          reason: event.reason || '',
+          command: event.command || '',
+          mode: event.mode || '',
+          options: Array.isArray(event.options) ? event.options : ['once', 'run', 'deny'],
           status: 'pending',
         };
         if (!Array.isArray(assistant.permissionRequests)) {
@@ -1354,19 +1383,18 @@ async function streamReply(conversation, assistant) {
         }
         assistant.permissionRequests.push(request);
         if (mode === 'agent') assistant.agentState = 'running';
-        state.agentStatus = `等待你确认 ${request.tool || '工具'} 的权限…`;
+        state.agentStatus =
+          request.kind === 'command'
+            ? '等待你确认 Agent 要执行的命令…'
+            : `等待你确认 ${request.tool || '工具'} 的权限…`;
         dom.composerHint.textContent = state.agentStatus;
         updateAssistantNode(assistant, Boolean(assistant.content));
         scrollToBottomIfStuck();
-      } else if (event.type === 'max_steps') {
-        assistant.agentState = 'max_steps';
-        if (typeof event.steps === 'number') assistant.agentStep = event.steps;
-        if (typeof event.max_steps === 'number') {
-          assistant.agentMaxSteps = event.max_steps;
-        }
-        const note = event.message || '已达到最大执行步数，Agent 已停止。';
-        assistant.content = (assistant.content || '') + `\n\n> ${note}`;
-        scheduleAssistantRender(assistant);
+        scheduleSave();
+      } else if (event.type === 'loop_detected') {
+        // Loop Protection：提示模型重新规划，不展示虚假的最大步数
+        state.agentStatus = '检测到重复操作，Agent 正在重新规划…';
+        dom.composerHint.textContent = state.agentStatus;
       } else if (event.type === 'done') {
         if (mode === 'agent') {
           assistant.agentState = 'done';
@@ -1411,6 +1439,8 @@ async function streamReply(conversation, assistant) {
       state.renderTimer = null;
     }
     state.pendingMessage = null;
+
+    settleAgentDuration();
 
     if (!assistant.content && !assistant.error && !assistant.stopped) {
       assistant.error = '没有收到任何回复，请重试。';
@@ -2770,10 +2800,88 @@ const SECURITY_EVENT_TEXT = {
   'permission.timeout': '确认超时',
   'permission.cancelled': '确认取消',
   'command.executed': '执行命令',
+  'command.failed': '命令失败',
+  'tool.security': '策略判定',
   'workspace.file_deleted': '删除文件',
   'plugin.loaded': '加载插件',
   'mcp.connected': '连接 MCP',
 };
+
+/* 安全模式：Safe / Auto Review / Risky
+   只决定「什么时候需要用户确认」，不限制 Agent 能操作哪些路径。 */
+const SECURITY_MODE_ICON = { safe: 'shield', auto_review: 'spark', risky: 'zap' };
+let securityData = null;
+
+function renderSecurityModes(data) {
+  securityData = data || null;
+  if (!dom.securityModes) return;
+  const modes = Array.isArray(data && data.modes) ? data.modes : [];
+  if (!modes.length) {
+    dom.securityModes.innerHTML =
+      '<p class="plugins__empty">安全模式不可用，请确认后端已启动。</p>';
+    return;
+  }
+  dom.securityModes.replaceChildren();
+  modes.forEach((mode) => {
+    const active = mode.id === data.mode;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `security-mode${active ? ' is-active' : ''}`;
+    card.dataset.mode = mode.id;
+    card.setAttribute('aria-pressed', active ? 'true' : 'false');
+
+    const head = document.createElement('span');
+    head.className = 'security-mode__head';
+    const iconWrap = document.createElement('span');
+    iconWrap.className = 'security-mode__icon';
+    iconWrap.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><use href="#i-${
+      SECURITY_MODE_ICON[mode.id] || 'shield'
+    }"/></svg>`;
+    head.appendChild(iconWrap);
+    const label = document.createElement('span');
+    label.className = 'security-mode__label';
+    label.textContent = mode.label || mode.id;
+    head.appendChild(label);
+    if (active) {
+      const badge = document.createElement('span');
+      badge.className = 'security-mode__badge';
+      badge.textContent = '当前';
+      head.appendChild(badge);
+    }
+    card.appendChild(head);
+
+    const desc = document.createElement('span');
+    desc.className = 'security-mode__desc';
+    desc.textContent = mode.description || '';
+    card.appendChild(desc);
+
+    const detail = document.createElement('span');
+    detail.className = 'security-mode__detail';
+    detail.textContent = mode.detail || '';
+    card.appendChild(detail);
+
+    card.addEventListener('click', () => handleSecurityModeChange(mode.id));
+    dom.securityModes.appendChild(card);
+  });
+
+  if (dom.securityModeNote) {
+    dom.securityModeNote.hidden = false;
+    dom.securityModeNote.textContent =
+      '安全模式仅记录判定状态，不会阻止任何命令或工具执行；WeCi 不限制 Workspace 路径，也不因命令风险拒绝执行。能否成功只取决于操作系统权限、文件系统与命令本身。Stop、Tool Timeout、Loop Detection 与 Context 管理仍然生效。';
+  }
+}
+
+async function handleSecurityModeChange(mode) {
+  if (!securityData || mode === securityData.mode) return;
+  try {
+    const snapshot = await setSecurityMode(mode);
+    renderSecurityModes(snapshot);
+    const label = (snapshot.modes || []).find((item) => item.id === snapshot.mode);
+    toast(`已切换到 ${label ? label.label : snapshot.mode}`, 'success');
+  } catch (error) {
+    toast(error && error.message ? error.message : '安全模式切换失败。', 'error');
+  }
+}
 
 function permissionGrantState(principal, permission) {
   const entry =
@@ -3150,13 +3258,22 @@ function renderPermissions(data, log) {
 
 async function loadPermissions() {
   try {
-    const [data, log] = await Promise.all([fetchPermissions(), fetchSecurityLog(80)]);
+    const [data, log, security] = await Promise.all([
+      fetchPermissions(),
+      fetchSecurityLog(80),
+      fetchSecurity(),
+    ]);
     renderPermissions(data, log);
+    renderSecurityModes(security);
   } catch (error) {
     console.warn('[WeCi] failed to load permissions', error);
     if (dom.permOverview) {
       dom.permOverview.innerHTML =
         '<p class="plugins__empty">权限服务不可用，请确认后端已启动。</p>';
+    }
+    if (dom.securityModes) {
+      dom.securityModes.innerHTML =
+        '<p class="plugins__empty">安全模式不可用，请确认后端已启动。</p>';
     }
   }
 }

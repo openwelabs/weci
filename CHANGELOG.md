@@ -2,6 +2,57 @@
 
 All notable changes to WeCi are documented here.
 
+## [0.16.0] — Agent Unlimited Execution
+
+### 新增
+
+- **Loop Protection**（`backend/services/agent.py` 的 `LoopGuard`）：检测连续相同的 Tool + 参数与连续相同错误（默认 3 次），触发时返回结构化 `LOOP_DETECTED` 错误并让模型重新规划；同一 Run 内重复触发则结束 Run（`error_type=loop`）
+- **新增 SSE 事件** `loop_detected`，前端显示「检测到重复操作，Agent 正在重新规划…」
+- **Agent Run 错误类型** 新增 `loop`
+
+### 变更
+
+- **不再拦截任何操作**：执行链路改为 `Agent → Tool Registry → Tool → OS`。Permission Manager、Security Policy 与三种安全模式只记录状态，不再阻止工具 / 命令执行（包括显式 Deny）
+- **移除 Workspace 路径限制**：`WorkspaceGuard` 只做路径规范化，不再拒绝 Workspace 外路径、绝对路径、`..` 或符号链接；`PATH_OUTSIDE_WORKSPACE` 类错误不再产生
+- 文件操作与 `run_command` 的错误改为执行后如实返回（OS 权限 / 文件系统 / 命令本身决定成败），审计日志与取消 / 超时 / Loop Detection / Context 管理保持不变
+- **默认全放开**：默认安全模式记录为 `risky`，所有命令与工具自动执行；安全模式仅用于记录状态
+- **移除固定最大步数**：删除 `MAX_AGENT_STEPS = 10` 与 `max_steps` 事件。Agent Loop 改为 `while (True)`，只在任务完成、用户 Stop / Cancel、Provider 错误、Context 超限、Loop Detection 或运行时限制下停止
+- **Agent Run 仅统计**：`steps` / `current_step` / `tool_calls` / `duration` / `started_at` / `finished_at` 继续记录，但不再作为停止条件；移除 `AgentRun.max_steps` 字段与 `set_step(max_steps=...)` 参数
+- **Agent Context**：不再向模型注入「你还有 X steps」，改为提示 "Continue working until the task is complete. Avoid repetitive actions."
+- **Agent UI**：删除 `Step 3 / 10`，改为 `42 tool calls` / `42 tool calls · 2m 31s`，运行中显示 `Running...`
+- **Run History 容量**：`MAX_RUN_EVENTS` 提升到 2000，一次执行上百次 Tool Call 仍可完整回溯
+
+### 兼容
+
+- Unlimited Execution 与安全模式（Safe / Auto Review / Risky）互相独立，不绕过 Permission Manager 与 Security Policy Manager
+- 单个 Tool 仍保留自身 timeout（如 `run_command` 默认 30s），Context Manager 仍负责压缩旧 Tool Result 与控制模型上下文窗口
+- 普通 Chat 模式不受影响
+
+## [0.15.0] — Agent 命令执行安全策略
+
+### 新增
+
+- **Security Policy Manager**（`backend/services/security_policy.py`）：统一管理当前安全模式并产出策略判定（`mode` / `risk` / `requires_confirmation` / `reason` / `matched`），叠加在 Permission Manager 之上
+- **三种安全模式**：`safe`（所有命令都需确认，不记住批准）/ `auto_review`（默认，安全命令自动执行、危险命令确认）/ `risky`（自动执行，但保留解析、审计、超时与 Stop）
+- **Command Risk Analyzer**（`backend/services/command_risk.py`）：基于 `shlex` 结构化分词，处理管道、重定向、`sudo` / `env` / `xargs` 包装与 `sh -c`，识别递归删除、权限修改、系统操作、进程、磁盘、`curl | sh` 与系统目录写入；无法解析时按高风险处理
+- **确认 UI**：展示将要执行的完整命令、风险等级与原因，只提供 **Allow once / Deny**，不默认选中任何按钮
+- **安全模式切换 UI**：设置页新增「Agent 命令执行模式」，切换到 Risky 时提示一次
+- **命令审计**：Agent Run 的 `ToolCallRecord` 新增 `security_mode` / `risk` / `risk_reason` / `confirmation_required` / `command` / `cwd` / `exit_code` / `timed_out`
+- **Tool 风险声明**：`Tool.risk`（`safe` / `dangerous`）纳入统一策略，插件工具与未来的 MCP 工具可复用
+- **REST API**：`GET /api/security`、`POST /api/security/mode`
+- **持久化**：`.weci/security.json`，原子写入 + `0600`
+- **测试**：新增 `tests/test_security_policy.py`，覆盖三种模式、引号内 `rm -rf` 误判、参数解析、cwd 记录、确认记录、取消、日志脱敏
+
+### 变更
+
+- Workspace 从「不可突破的硬沙箱」调整为 **项目上下文 / 默认工作目录 / 文件浏览范围**：文件工具仍受 `WorkspaceGuard` 约束，`run_command` 的 `cwd` 可以指向 Workspace 之外，由安全策略决定是否需要确认
+- 安全模式决定「什么时候问用户」，而不是决定「用户永远不能做什么」；Risky 模式仍保留 Tool Registry、参数校验、审计、超时与取消
+
+### 兼容
+
+- 复用现有 Agent Loop、Tool Registry、Plugin System、MCP、Workspace、Agent Run、Permission Manager，未重新设计既有架构
+- 普通 Chat 模式不受影响
+
 ## [0.14.0] — 统一权限 / 安全系统
 
 ### 新增

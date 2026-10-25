@@ -530,3 +530,22 @@ export async function fetchSecurityLog(limit = 50) {
   const data = await response.json();
   return Array.isArray(data.log) ? data.log : [];
 }
+
+/** 命令执行安全模式：Safe / Auto Review / Risky。 */
+export async function fetchSecurity() {
+  const response = await fetch('/api/security', {
+    headers: { Accept: 'application/json' },
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}
+
+export async function setSecurityMode(mode) {
+  const response = await fetch('/api/security/mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  if (!response.ok) throw new Error(await readErrorDetail(response));
+  return response.json();
+}

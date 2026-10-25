@@ -78,13 +78,14 @@ WeCi 做两件事：**安静地聊天**，以及在 **Agent 模式**下让 AI �
 
 **权限与安全**
 
-- 统一的 **Permission Manager**：内置工具、插件工具与 MCP 工具全部走 `Tool Registry → Permission Manager`
+- 统一的 **Permission Manager**：内置工具、插件工具与 MCP 工具共用同一套权限记录
 - 带 scope 的权限：`workspace:read` / `workspace:write` / `workspace:delete` / `command:execute` / `network:access` / `memory:read` / `memory:write` / `mcp:use` / `plugin:use`
-- **默认拒绝 + 最小权限**：低风险权限自动放行，中 / 高风险操作必须由你确认
-- Agent 申请权限时显示「Agent 请求执行 …」，提供 **仅本次允许 / 本次 Run 允许 / 拒绝**
-- Workspace 沙箱拒绝 `../` 逃逸与 Root 外路径，读 / 写 / 删除是三项独立权限
-- `run_command` 被限制在 Workspace 内，环境变量经脱敏过滤，支持 timeout 与取消，并记录命令、退出码、stdout、stderr
-- 独立的「权限与安全」页面展示 Workspace、Provider、插件、MCP Server、工具权限与脱敏安全日志，支持 Allow / Deny / Reset
+- **WeCi 不拦截任何操作**：Permission Manager 与 Security Policy 只记录状态，不阻止工具执行
+- **三种记录模式**：Safe（记录“原本需要确认”）/ Auto Review（记录安全 / 危险判定）/ Risky（默认，记录为全放开）。切换模式不会改变执行结果
+- 命令风险由结构化解析器判定（`shlex` 分词 + 管道 / 重定向 / `sh -c` 解析），`echo "rm -rf"` 不会被误判为删除，`rm -rf ./build` 会被识别
+- **Workspace 不做路径限制**：绝对路径、`..`、符号链接与 Workspace 外路径都直接交给操作系统；文件工具与 `run_command` 不因路径被拒绝
+- `run_command` 环境变量经脱敏过滤，支持 timeout 与取消，并记录 command / cwd / 模式 / 风险 / 原因 / exitCode
+- 独立的「权限与安全」页面展示 Workspace、Provider、插件、MCP Server、工具权限与脱敏安全日志；Allow / Deny 仅记录偏好
 - 安全日志永不包含 API Key、Token、Password、Cookie 或 Authorization
 
 **界面**
@@ -101,16 +102,17 @@ WeCi 做两件事：**安静地聊天**，以及在 **Agent 模式**下让 AI �
 
 - **Chat**：普通对话。模型的回复直接以流式 SSE 返回，不会调用工具。
 - **Agent**：允许模型在需要时调用已注册的工具。后端运行一个
-  [Agent Loop](#agent-loop)，把工具结果再交回模型继续推理，最多循环
-  `MAX_AGENT_STEPS`（默认 10）步，防止无限运行。
+  [Agent Loop](#agent-loop)，把工具结果再交回模型继续推理，直到任务完成。
+  没有最大步数限制，真正的边界来自用户 Stop、Tool Timeout、Loop Detection 与
+  Context Management。
 
 Agent 模式下，助手消息正文上方会显示「Agent 执行过程」，只呈现实际发生的执行事实，
 不展示模型的隐藏推理过程：
 
-- **执行状态**：执行中显示 `第 N / 10 步 · 执行中`；完成后显示 `已完成 · 共 N 步`；
-  达到步数上限显示 `达到最大步数（10）`；停止或中断显示 `已停止`。
-- **工具卡片**：展示状态图标（执行中转圈 / 成功 / 失败 / 已中断）、工具名、所属步骤、
-  状态与耗时；失败时直接显示错误原因。
+- **执行状态**：运行中显示 `N tool calls · Running...`；完成后显示 `N tool calls · 2m 31s`；
+  停止或中断显示 `N tool calls · 已停止`。不展示任何虚假的最大步数。
+- **工具卡片**：展示状态图标（执行中转圈 / 成功 / 失败 / 已中断）、工具名、状态与耗时；
+  失败时直接显示错误原因。
 - **参数与结果**：默认折叠，点击「参数」「结果」可展开查看；超长结果（超过 2 万字符）
   会被截断并在卡片内滚动。
 - **中断处理**：点击停止会立即中止流式请求，正在运行的卡片标记为「已中断」；
@@ -229,7 +231,7 @@ weci/
 │   │   ├── memory.py           # Memory 存储：scope 隔离、限额、JSON 持久化
 │   │   ├── message.py          # 消息 / 图片 / 文件附件模型与 OpenAI-compatible 转换
 │   │   ├── openai_client.py    # OpenAI-compatible 上游客户端（含工具调用流式解析）
-│   │   ├── agent.py            # Agent Loop：MAX_AGENT_STEPS、工具编排、SSE 事件
+│   │   ├── agent.py            # Agent Loop：Unlimited Execution、Loop Guard、SSE 事件
 │   │   └── sse.py              # SSE 事件编码
 │   ├── plugins/                # 插件系统核心
 │   │   ├── manifest.py         # manifest.json 加载与校验
@@ -468,10 +470,16 @@ weci-maker install dist/my-plugin-0.1.0.wcp
    ↓
 重新 build() 生成压缩后的 Context，再次发送给模型（回到「模型分析」）
    ↓
-步数 ≥ MAX_AGENT_STEPS？→ 发出 max_steps 事件并结束
+直到任务完成 / 用户 Stop / Provider 错误 / Loop Detection / Context 超限
 ```
 
-`MAX_AGENT_STEPS = 10`（可在 `agent.py` 顶部修改）。每一步对应一次模型调用。
+Agent 默认 **Unlimited Execution**：没有最大步数，每一步对应一次模型调用。
+步数、Tool Call 数量与耗时只作为统计信息展示，不再是停止条件。真正的边界是
+用户 Stop + Security Policy + Tool Timeout + Loop Detection + Context Manager。
+
+Loop Protection 会检测连续相同的 Tool + 参数（默认 3 次）与连续相同错误，
+触发时返回结构化错误 `LOOP_DETECTED` 让模型重新规划；同一 Run 内重复触发
+则结束 Run（`error_type=loop`）。
 
 ## MCP（Model Context Protocol）
 

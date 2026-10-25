@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "weci"
-version = "0.14.0"
+version = "0.16.0"
 description = "WeCi — 本地优先的 AI 对话客户端 + Agent 工作台"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -31,6 +31,7 @@ from backend.api.memory import router as memory_router
 from backend.api.permissions import router as permissions_router
 from backend.api.plugins import router as plugins_router
 from backend.api.providers import router as providers_router
+from backend.api.security import router as security_router
 from backend.api.system import router as system_router
 from backend.config import FRONTEND_DIR, settings
 from backend.mcp.manager import McpManager
@@ -40,6 +41,7 @@ from backend.services.agent_run import AgentRunManager
 from backend.services.memory import MemoryStore
 from backend.services.permissions import PermissionManager
 from backend.services.providers import ProviderManager
+from backend.services.security_policy import SecurityPolicyManager
 from backend.services.workspace import WorkspaceGuard
 from backend.tools.registry import ToolRegistry
 
@@ -67,10 +69,13 @@ def build_plugin_system(
     memory_store=None,
     permission_manager: PermissionManager | None = None,
     workspace_guard: WorkspaceGuard | None = None,
+    security_policy: SecurityPolicyManager | None = None,
 ) -> tuple[PluginRegistry, PluginLoader]:
     """组合根：构建插件注册表与加载器，自动加载所有插件。"""
     # 所有工具（内置 / 插件 / MCP）执行前都经同一个 Permission Manager
-    tool_registry = ToolRegistry(permission_manager=permission_manager)
+    tool_registry = ToolRegistry(
+        permission_manager=permission_manager, security_policy=security_policy
+    )
     plugin_registry = PluginRegistry(tool_registry=tool_registry)
     loader = PluginLoader(
         plugin_registry,
@@ -108,13 +113,17 @@ def create_app() -> FastAPI:
         confirm_timeout=settings.permission_confirm_timeout
     )
     workspace_guard = WorkspaceGuard(settings.workspace_root)
+    # 命令执行安全策略：Safe / Auto Review / Risky（叠加在权限层之上）
+    security_policy = SecurityPolicyManager(default_mode=settings.security_mode)
     plugin_registry, plugin_loader = build_plugin_system(
         memory_store,
         permission_manager=permission_manager,
         workspace_guard=workspace_guard,
+        security_policy=security_policy,
     )
     app.state.memory_store = memory_store
     app.state.permission_manager = permission_manager
+    app.state.security_policy = security_policy
     app.state.workspace_guard = workspace_guard
     app.state.plugin_registry = plugin_registry
     app.state.plugin_loader = plugin_loader
@@ -144,6 +153,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api")
     app.include_router(providers_router, prefix="/api")
     app.include_router(permissions_router, prefix="/api")
+    app.include_router(security_router, prefix="/api")
     app.include_router(agent_runs_router, prefix="/api")
     app.include_router(memory_router, prefix="/api")
     app.include_router(plugins_router, prefix="/api")

@@ -86,8 +86,17 @@ const AGENT_STATE_LABEL = {
   done: '已完成',
   error: '执行失败',
   stopped: '已停止',
-  max_steps: '达到最大步数',
 };
+
+/** 把毫秒格式化为 12s / 2m 31s，用于 Agent 执行耗时。 */
+function formatDuration(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
+}
 
 function formatArguments(value) {
   if (value === undefined || value === null) return '';
@@ -214,7 +223,8 @@ export function createToolCallCard(tc) {
 
 /**
  * 构建 Agent 执行过程：头部状态 + 工具调用卡片列表。
- * options.state / options.step / options.maxSteps 用于展示当前阶段。
+ * options.state / options.durationMs 用于展示当前阶段与耗时；
+ * 工具调用数量直接来自列表，不展示任何“最大步数”。
  */
 export function createToolCallsEl(toolCalls, options = {}) {
   const items = Array.isArray(toolCalls) ? toolCalls.filter(Boolean) : [];
@@ -239,17 +249,20 @@ export function createToolCallsEl(toolCalls, options = {}) {
     title.textContent = 'Agent 执行过程';
     head.appendChild(title);
 
-    const step = Number(options.step) || 0;
-    const maxSteps = Number(options.maxSteps) || 0;
+    const count = items.length;
+    const countText = `${count} tool calls`;
+    const duration = formatDuration(options.durationMs);
     let statusText = AGENT_STATE_LABEL[state] || '';
     if (state === 'running') {
-      statusText = step
-        ? `第 ${step}${maxSteps ? ` / ${maxSteps}` : ''} 步 · 执行中`
-        : '执行中';
-    } else if (state === 'done' && step) {
-      statusText = `已完成 · 共 ${step} 步`;
-    } else if (state === 'max_steps' && maxSteps) {
-      statusText = `达到最大步数（${maxSteps}）`;
+      statusText = count ? `${countText} · Running...` : 'Running...';
+    } else if (state === 'done') {
+      statusText = count
+        ? `${countText}${duration ? ` · ${duration}` : ''}`
+        : '已完成';
+    } else if (state === 'stopped') {
+      statusText = count ? `${countText} · 已停止` : '已停止';
+    } else if (state === 'error') {
+      statusText = count ? `${countText} · 执行失败` : '执行失败';
     }
     if (statusText) {
       const stateEl = document.createElement('span');
@@ -272,9 +285,11 @@ export function createToolCallsEl(toolCalls, options = {}) {
 }
 
 /* --------------------------------------------------------------------------
-   权限确认卡片（Agent 高风险操作）
+   权限确认卡片（Agent 高风险操作 / 高风险命令）
 
-   展示“Agent 请求执行 XXX”，提供 Allow once / Allow for this Run / Deny。
+   展示“Agent 请求执行 XXX”，按钮由服务端下发：
+     - 权限请求：Allow once / Allow for this Run / Deny
+     - 命令确认（安全模式）：Allow Once / Deny（不记住批准）
    已处理（granted / denied / timeout）后只展示结果，不再提供按钮。
    -------------------------------------------------------------------------- */
 
@@ -282,6 +297,8 @@ const PERMISSION_RISK_LABEL = {
   low: '低风险',
   medium: '中风险',
   high: '高风险',
+  safe: '安全',
+  dangerous: '高风险',
 };
 
 const PERMISSION_STATUS_LABEL = {
@@ -289,6 +306,18 @@ const PERMISSION_STATUS_LABEL = {
   granted: '已允许',
   denied: '已拒绝',
   timeout: '已超时',
+};
+
+const DECISION_LABEL = {
+  once: '允许一次',
+  run: '本次 Run 允许',
+  deny: '拒绝',
+};
+
+const DECISION_VARIANT = {
+  once: 'primary',
+  run: '',
+  deny: 'danger',
 };
 
 export function createPermissionCard(request, onResolve) {
@@ -305,9 +334,12 @@ export function createPermissionCard(request, onResolve) {
   stateIcon.appendChild(icon(status === 'granted' ? 'check' : 'shield'));
   head.appendChild(stateIcon);
 
+  const isCommand = request.kind === 'command';
   const title = document.createElement('span');
   title.className = 'perm-card__title';
-  title.textContent = request.title || `Agent 请求执行 ${request.tool || '工具'}`;
+  title.textContent =
+    request.title ||
+    (isCommand ? 'Agent 请求执行命令' : `Agent 请求执行 ${request.tool || '工具'}`);
   head.appendChild(title);
 
   const risk = PERMISSION_RISK_LABEL[request.risk];
@@ -325,19 +357,48 @@ export function createPermissionCard(request, onResolve) {
 
   card.appendChild(head);
 
-  const meta = document.createElement('div');
-  meta.className = 'perm-card__meta';
-  const permCode = document.createElement('code');
-  permCode.textContent = request.permission || '';
-  meta.append('权限：', permCode);
-  if (request.tool) {
-    const toolCode = document.createElement('code');
-    toolCode.textContent = request.tool;
-    meta.append(' · 工具：', toolCode);
-  }
-  card.appendChild(meta);
+  // 命令确认：完整展示将要执行的命令与风险原因
+  if (request.command) {
+    const label = document.createElement('div');
+    label.className = 'perm-card__label';
+    label.textContent = 'Agent wants to run:';
+    card.appendChild(label);
 
-  if (request.detail) {
+    const command = document.createElement('pre');
+    command.className = 'perm-card__command';
+    command.textContent = request.command;
+    card.appendChild(command);
+  }
+
+  if (request.reason) {
+    const reason = document.createElement('div');
+    reason.className = 'perm-card__reason';
+    reason.textContent = `原因：${request.reason}`;
+    card.appendChild(reason);
+  }
+
+  if (request.mode) {
+    const mode = document.createElement('div');
+    mode.className = 'perm-card__mode';
+    mode.textContent = `安全模式：${request.mode}`;
+    card.appendChild(mode);
+  }
+
+  if (!isCommand) {
+    const meta = document.createElement('div');
+    meta.className = 'perm-card__meta';
+    const permCode = document.createElement('code');
+    permCode.textContent = request.permission || '';
+    meta.append('权限：', permCode);
+    if (request.tool) {
+      const toolCode = document.createElement('code');
+      toolCode.textContent = request.tool;
+      meta.append(' · 工具：', toolCode);
+    }
+    card.appendChild(meta);
+  }
+
+  if (!isCommand && request.detail) {
     const detail = document.createElement('pre');
     detail.className = 'perm-card__detail';
     detail.textContent = request.detail;
@@ -347,15 +408,19 @@ export function createPermissionCard(request, onResolve) {
   if (status === 'pending' && typeof onResolve === 'function') {
     const actions = document.createElement('div');
     actions.className = 'perm-card__actions';
-    [
-      ['once', '仅本次允许', 'primary'],
-      ['run', '本次 Run 允许', ''],
-      ['deny', '拒绝', 'danger'],
-    ].forEach(([decision, label, variant]) => {
+    const options =
+      Array.isArray(request.options) && request.options.length
+        ? request.options
+        : ['once', 'run', 'deny'];
+    options.forEach((decision) => {
+      const label = DECISION_LABEL[decision];
+      if (!label) return;
+      const variant = DECISION_VARIANT[decision];
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `perm-btn${variant ? ` perm-btn--${variant}` : ''}`;
       btn.textContent = label;
+      // 不默认选中任何按钮，必须由用户主动点击
       btn.addEventListener('click', () => {
         actions.querySelectorAll('button').forEach((item) => {
           item.disabled = true;
@@ -568,8 +633,7 @@ export function createMessageEl(message, options = {}) {
     // Agent 工具调用卡片（在正文之前）
     const toolCallsEl = createToolCallsEl(message.toolCalls, {
       state: message.agentState,
-      step: message.agentStep,
-      maxSteps: message.agentMaxSteps,
+      durationMs: message.agentDurationMs,
     });
     if (toolCallsEl) content.appendChild(toolCallsEl);
 

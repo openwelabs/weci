@@ -61,7 +61,7 @@ DEFAULT_CONFIRM_TIMEOUT = 120.0
 # 脱敏
 # ---------------------------------------------------------------------------
 _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?i)\b(sk-[A-Za-z0-9_\-]{8,})"),
+    re.compile(r"(?i)\b(sk-)[A-Za-z0-9_\-]{8,}"),
     re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._\-+=/]{8,}"),
     re.compile(r"(?i)\b(x-api-key\s*[:=]\s*)\S+"),
     re.compile(r"(?i)\b(api[_-]?key\s*[:=]\s*)\S+"),
@@ -141,7 +141,7 @@ class PermissionDecision:
 
 @dataclass
 class PermissionRequest:
-    """等待用户确认的权限请求。"""
+    """等待用户确认的权限 / 命令执行请求。"""
 
     id: str
     run_id: str
@@ -153,6 +153,13 @@ class PermissionRequest:
     created_at: str = field(default_factory=_now_iso)
     decision: str | None = None
     future: asyncio.Future | None = field(default=None, repr=False)
+    # 命令级确认（Security Policy）额外携带的上下文
+    kind: str = "permission"  # permission / command / tool
+    risk: str = "high"  # low / medium / high / safe / dangerous
+    reason: str = ""
+    command: str = ""
+    mode: str = ""
+    options: list[str] = field(default_factory=lambda: ["once", "run", "deny"])
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -164,7 +171,12 @@ class PermissionRequest:
             "title": self.title,
             "detail": self.detail,
             "created_at": self.created_at,
-            "risk": PERMISSION_RISK.get(self.permission, "high"),
+            "risk": self.risk,
+            "kind": self.kind,
+            "reason": self.reason,
+            "command": self.command,
+            "mode": self.mode,
+            "options": list(self.options),
         }
 
 
@@ -207,11 +219,18 @@ class PermissionManager:
         principals: Iterable[str] | str,
         run_id: str = "",
         tool_name: str = "",
+        session_allow: Iterable[str] = (),
     ) -> list[PermissionDecision]:
-        """逐个判定工具声明的权限。不会阻塞、不会弹确认。"""
+        """逐个判定工具声明的权限。不会阻塞、不会弹确认。
+
+        ``session_allow`` 是**本次调用**由 Security Policy 放行的权限
+        （例如 Auto Review 下判定为安全、可以自动执行的命令）。它只对当前
+        调用有效，不会持久化，也不会写入 Run 级授权。
+        """
         principal_list = (
             [principals] if isinstance(principals, str) else list(principals)
         )
+        allowed_for_call = set(normalize_permissions(session_allow))
         decisions: list[PermissionDecision] = []
         for permission in normalize_permissions(permissions):
             decisions.append(
@@ -220,6 +239,7 @@ class PermissionManager:
                     principal_list=principal_list,
                     run_id=run_id,
                     tool_name=tool_name,
+                    session_allow=allowed_for_call,
                 )
             )
         return decisions
@@ -231,6 +251,7 @@ class PermissionManager:
         principal_list: list[str],
         run_id: str,
         tool_name: str,
+        session_allow: set[str] | None = None,
     ) -> PermissionDecision:
         principal = principal_list[0] if principal_list else "global"
 
@@ -254,6 +275,10 @@ class PermissionManager:
         # 2) 会话级（本次 Run）授权
         if run_id and permission in self._run_grants.get(run_id, set()):
             return _decision(True, "", "run")
+
+        # 2.5) Security Policy 对「本次调用」的放行（例如安全命令自动执行）
+        if session_allow and permission in session_allow:
+            return _decision(True, "", "policy")
 
         # 3) 持久授权（含 global）
         for candidate in principal_list:
@@ -280,17 +305,37 @@ class PermissionManager:
         principals: Iterable[str] | str,
         run_id: str = "",
         tool_name: str = "",
+        session_allow: Iterable[str] = (),
     ) -> PermissionDecision:
-        """便捷方法：返回第一个未通过判定的权限结果。"""
-        for decision in self.evaluate(
-            permissions, principals=principals, run_id=run_id, tool_name=tool_name
-        ):
+        """便捷方法：永远放行。
+
+        WeCi 不再用权限系统阻止工具执行：即使某个权限在设置中被标记为
+        Deny 或原本需要确认，也只记录状态（``source="unrestricted"``），
+        是否真正成功由操作系统与工具本身决定。
+        """
+        decisions = self.evaluate(
+            permissions,
+            principals=principals,
+            run_id=run_id,
+            tool_name=tool_name,
+            session_allow=session_allow,
+        )
+        principal = (
+            principals if isinstance(principals, str) else (list(principals) or ["global"])[0]
+        )
+        for decision in decisions:
             if not decision.allowed:
-                return decision
+                return PermissionDecision(
+                    allowed=True,
+                    permission=decision.permission,
+                    principal=decision.principal,
+                    reason=decision.reason,
+                    source="unrestricted",
+                )
         return PermissionDecision(
             allowed=True,
             permission="",
-            principal=principals if isinstance(principals, str) else (list(principals) or ["global"])[0],
+            principal=principal,
             reason="",
             source="granted",
         )
@@ -306,26 +351,49 @@ class PermissionManager:
         run_id: str = "",
         tool_name: str = "",
         detail: str = "",
+        title: str | None = None,
+        kind: str = "permission",
+        risk: str | None = None,
+        reason: str = "",
+        command: str = "",
+        mode: str = "",
+        options: Iterable[str] | None = None,
     ) -> PermissionRequest:
         principal = principals if isinstance(principals, str) else (
             (list(principals) or ["global"])[0]
         )
         label = PERMISSION_DESCRIPTIONS.get(permission, permission)
-        title = f"Agent 请求执行：{label}"
+        resolved_title = title or f"Agent 请求执行：{label}"
         request = PermissionRequest(
             id=f"perm-{uuid.uuid4().hex[:12]}",
             run_id=run_id,
             principal=principal,
             permission=permission,
             tool_name=tool_name,
-            title=title,
+            title=resolved_title,
             detail=redact(detail or ""),
+            kind=kind,
+            risk=risk or PERMISSION_RISK.get(permission, "high"),
+            reason=redact(reason or ""),
+            command=redact(command or ""),
+            mode=mode,
+            options=_normalize_options(options),
             future=asyncio.get_event_loop().create_future()
             if _has_running_loop()
             else None,
         )
         with self._lock:
             self._requests[request.id] = request
+        self.log(
+            "permission.requested",
+            permission=permission,
+            principal=principal,
+            tool=tool_name,
+            kind=kind,
+            risk=request.risk,
+            mode=mode,
+            run_id=run_id,
+        )
         return request
 
     async def wait(
@@ -638,6 +706,14 @@ def _has_running_loop() -> bool:
         return True
     except RuntimeError:
         return False
+
+
+def _normalize_options(options: Iterable[str] | None) -> list[str]:
+    """确认按钮选项；未指定时使用完整的权限确认选项。"""
+    if options is None:
+        return ["once", "run", "deny"]
+    allowed = [item for item in options if item in GRANT_SCOPES or item == "deny"]
+    return allowed or ["once", "deny"]
 
 
 __all__ = [

@@ -314,7 +314,18 @@ function normalizeMessage(raw) {
         permission: typeof req.permission === 'string' ? req.permission : '',
         title: typeof req.title === 'string' ? req.title : '',
         detail: typeof req.detail === 'string' ? req.detail : '',
-        risk: req.risk === 'low' || req.risk === 'medium' ? req.risk : 'high',
+        risk:
+          req.risk === 'low' ||
+          req.risk === 'medium' ||
+          req.risk === 'safe' ||
+          req.risk === 'dangerous'
+            ? req.risk
+            : 'high',
+        kind: req.kind === 'command' || req.kind === 'tool' ? req.kind : 'permission',
+        reason: typeof req.reason === 'string' ? req.reason : '',
+        command: typeof req.command === 'string' ? req.command : '',
+        mode: typeof req.mode === 'string' ? req.mode : '',
+        options: Array.isArray(req.options) && req.options.length ? req.options : ['once', 'deny'],
         status:
           req.status === 'granted' || req.status === 'denied' ? req.status : 'timeout',
       }));
@@ -326,14 +337,19 @@ function normalizeMessage(raw) {
   } else if (
     raw.agentState === 'done' ||
     raw.agentState === 'error' ||
-    raw.agentState === 'stopped' ||
-    raw.agentState === 'max_steps'
+    raw.agentState === 'stopped'
   ) {
     message.agentState = raw.agentState;
+  } else if (raw.agentState === 'max_steps') {
+    // 旧版本遗留状态：Unlimited Execution 下不再存在最大步数
+    message.agentState = 'stopped';
   }
   if (typeof raw.agentStep === 'number') message.agentStep = raw.agentStep;
-  if (typeof raw.agentMaxSteps === 'number') {
-    message.agentMaxSteps = raw.agentMaxSteps;
+  if (typeof raw.agentStartedAt === 'number') {
+    message.agentStartedAt = raw.agentStartedAt;
+  }
+  if (typeof raw.agentDurationMs === 'number') {
+    message.agentDurationMs = raw.agentDurationMs;
   }
   if (raw.interrupted === true) message.interrupted = true;
   // 空白的 assistant 消息通常是刷新时中断的半成品

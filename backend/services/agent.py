@@ -12,10 +12,14 @@ system、历史消息、附件、Workspace 与工具结果都在同一个 Contex
   start       开始
   thinking    模型正在处理（第 N 步）
   tool_call   工具调用：running（含参数）/ done（含输出）/ error（含原因）
+  loop_detected  检测到重复操作，提示模型重新规划
   delta       最终回答的文本增量
-  max_steps   达到最大步数，提前结束
   error       出错
   done        正常结束
+
+Agent Loop 默认不限制执行步数（Unlimited Execution），只在任务完成、用户
+Stop / Cancel、Provider 出错、Context 超限、Loop Detection 触发或运行时
+限制下停止。步数仅作为统计信息上报，不再作为停止条件。
 
 工具的参数与返回结果是用户可核查的执行事实，会通过 SSE 传给前端；
 服务端会把过长的输出截断后再发送，完整内容仅用于模型上下文。
@@ -35,12 +39,14 @@ from backend.services.openai_client import (
     UpstreamError,
     stream_chat_with_tools,
 )
-from backend.services.permissions import redact
 from backend.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-MAX_AGENT_STEPS = 10
+# Loop Protection：连续多少次相同操作 / 相同错误视为无进展
+LOOP_REPEAT_THRESHOLD = 3
+# 同一次 Run 内最多容忍几次重复检测；超过后结束 Run
+LOOP_MAX_DETECTIONS = 2
 
 # 单个工具结果在 UI 中最多展示的字符数（完整结果仍会发给模型）
 MAX_TOOL_DISPLAY_CHARS = 20_000
@@ -49,12 +55,90 @@ AGENT_SYSTEM_PROMPT = (
     "你是 WeCi 的 Agent 助手，可以在需要时调用工具来获取准确信息或执行计算。\n"
     "可用工具会随请求提供。当用户的问题需要计算、查询当前时间或联网信息时，"
     "请主动调用对应工具，把工具返回的结果作为依据来回答。\n"
+    "Continue working until the task is complete. Avoid repetitive actions.\n"
     "记忆规则：只有当用户**明确要求**记住或忘记某事时（例如“记住我使用 Fedora”"
     "“忘掉我的编辑器”），才调用 save_memory / delete_memory 工具；"
     "不要把普通聊天内容自动保存为记忆，也不要在用户未要求时删除记忆。"
     "如果上下文中提供了 <memories>，只在相关问题中参考，不要臆造。\n"
     "回答要简洁、准确；如果工具不可用或结果不足以回答，请如实说明。"
 )
+
+
+class LoopGuard:
+    """检测 Agent 无进展的重复操作（相同调用 / 相同错误连续出现）。
+
+    仅做结构化比对，不解析业务语义：
+      - 相同 Tool + 相同参数连续出现 ``LOOP_REPEAT_THRESHOLD`` 次；
+      - 相同错误连续出现 ``LOOP_REPEAT_THRESHOLD`` 次。
+
+    触发后调用方应告知模型重新规划；再次触发则结束 Run。
+    """
+
+    def __init__(self, threshold: int = LOOP_REPEAT_THRESHOLD) -> None:
+        self.threshold = max(2, int(threshold))
+        self.detections = 0
+        self._last_call: tuple[str, str] | None = None
+        self._call_streak = 0
+        self._last_error = ""
+        self._error_streak = 0
+
+    @staticmethod
+    def _signature(tool_name: str, arguments: Any) -> tuple[str, str]:
+        raw = arguments
+        if isinstance(raw, str):
+            text = raw.strip()
+            try:
+                raw = json.loads(text)
+            except ValueError:
+                return tool_name, text
+        if not isinstance(raw, dict):
+            raw = {}
+        try:
+            canonical = json.dumps(
+                raw, ensure_ascii=False, sort_keys=True, default=str
+            )
+        except (TypeError, ValueError):
+            canonical = str(raw)
+        return tool_name, canonical
+
+    def check_call(self, tool_name: str, arguments: Any) -> str | None:
+        """执行前检查：相同 Tool + 相同参数是否连续重复。"""
+        signature = self._signature(tool_name, arguments)
+        if signature == self._last_call:
+            self._call_streak += 1
+        else:
+            self._last_call = signature
+            self._call_streak = 1
+        if self._call_streak >= self.threshold:
+            return (
+                f"工具 {tool_name} 使用完全相同的参数连续执行了 "
+                f"{self._call_streak} 次。"
+            )
+        return None
+
+    def check_result(self, tool_name: str, ok: bool, error: str | None) -> str | None:
+        """执行后检查：相同错误是否连续出现。"""
+        if ok:
+            self._last_error = ""
+            self._error_streak = 0
+            return None
+        text = (error or "工具执行失败").strip()
+        if text and text == self._last_error:
+            self._error_streak += 1
+        else:
+            self._last_error = text
+            self._error_streak = 1
+        if self._error_streak >= self.threshold:
+            return (
+                f"工具 {tool_name} 连续 {self._error_streak} 次返回相同错误："
+                f"{text[:200]}"
+            )
+        return None
+
+    def record_detection(self) -> bool:
+        """记录一次检测，返回 True 表示应结束 Run。"""
+        self.detections += 1
+        return self.detections >= LOOP_MAX_DETECTIONS
 
 
 def _display_arguments(raw: str | dict[str, Any] | None) -> Any:
@@ -81,37 +165,6 @@ def _display_output(output: str) -> str:
     )
 
 
-def _describe_action(tool_name: str, arguments: Any) -> str:
-    """生成给用户看的、已脱敏的操作描述（用于权限确认卡片）。"""
-    if not isinstance(arguments, dict):
-        return f"调用工具 {tool_name}"
-
-    if tool_name == "run_command":
-        command = arguments.get("command")
-        if command:
-            return f"执行命令：{redact(str(command))[:300]}"
-
-    path = arguments.get("path") or arguments.get("file")
-    if tool_name == "delete_file":
-        return f"删除 Workspace 文件：{path}" if path else "删除 Workspace 文件"
-    if tool_name == "write_file":
-        content = str(arguments.get("content") or "")
-        return (
-            f"写入 Workspace 文件：{path}（{len(content)} 字符）"
-            if path
-            else "写入 Workspace 文件"
-        )
-    if tool_name in ("read_file", "list_dir") and path:
-        return f"访问 Workspace 路径：{path}"
-
-    target = arguments.get("url") or arguments.get("query")
-    if target:
-        return f"访问网络：{redact(str(target))[:200]}"
-
-    keys = ", ".join(list(arguments)[:4])
-    return f"调用工具 {tool_name}" + (f"（参数：{keys}）" if keys else "")
-
-
 async def run_agent(
     context: ContextManager,
     *,
@@ -124,6 +177,7 @@ async def run_agent(
     stream: bool = True,
     cancel_event: asyncio.Event | None = None,
     permission_manager: Any = None,
+    security_policy: Any = None,
     run_id: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """执行 Agent Loop，yield 上述 SSE 事件 dict。
@@ -135,25 +189,44 @@ async def run_agent(
     ``cancel_event`` 由 AgentRunManager 提供：用户点击 Stop 后被设置，
     Agent Loop 在每步与工具之间检查并立即停止，避免继续消耗上游请求。
 
-    ``permission_manager`` 是统一权限层。工具执行前先按 ``Tool.permissions``
-    判定；高风险权限会 yield ``permission_request`` 事件并等待用户确认
-    （Allow once / Allow for this Run / Deny），**不**默认放行。
-    Agent Loop 本身不做任何权限判断，只负责把判定结果转成事件。
+    ``permission_manager`` 是权限记录层，``security_policy`` 是命令 / 工具
+    风险判定层（Safe / Auto Review / Risky）。二者只**记录状态**，不会在
+    执行前拦截任何工具或命令：
+
+        Agent → Tool Registry → Tool → OS
+
+    失败后由工具与操作系统如实返回错误，再写回 Context 与审计日志。
     """
     def _cancelled() -> bool:
         return cancel_event is not None and cancel_event.is_set()
 
-    def _evaluate_permission(tool_name: str, arguments: Any) -> dict[str, Any]:
-        """在工具执行前做统一权限判定（不阻塞）。
+    def _evaluate_security(tool_name: str, arguments: Any) -> Any:
+        """命令 / 工具风险判定；无策略层时返回 None。"""
+        if security_policy is None:
+            return None
+        args = arguments if isinstance(arguments, dict) else {}
+        try:
+            return security_policy.evaluate_tool(
+                tool_name, args, declared_risk=registry.risk_for(tool_name)
+            )
+        except Exception:  # noqa: BLE001 — 策略异常不得让 Agent 崩溃
+            logger.exception("security policy evaluation failed: %s", tool_name)
+            return None
 
-        返回值：
-          - ``allowed=True``：可以执行，附 ``permission`` 判定信息
-          - ``allowed=False``：直接拒绝，附 ``message``
-          - ``needs_confirmation=True``：需要用户确认，附 ``request``，
-            由调用方 yield ``permission_request`` 事件后再 ``await wait()``
+    def _evaluate_permission(tool_name: str, arguments: Any) -> dict[str, Any]:
+        """记录「策略 + 权限」判定结果，但**永远放行**。
+
+        WeCi 不再在执行前拦截工具或命令：Security Policy 与 Permission
+        Manager 仅用于记录状态（安全模式、风险等级、权限来源），是否真正
+        执行成功只由操作系统与工具本身决定。
         """
+        args = arguments if isinstance(arguments, dict) else {}
+        policy = _evaluate_security(tool_name, args)
+        security = policy.to_dict() if policy is not None else None
+
         if permission_manager is None:
-            return {"allowed": True}
+            return {"allowed": True, "security": security}
+
         principals = registry.principals_for(tool_name)
         permissions = registry.permissions_for(tool_name)
         decision = permission_manager.check(
@@ -162,65 +235,41 @@ async def run_agent(
             run_id=run_id,
             tool_name=tool_name,
         )
-        if decision.allowed:
-            if permissions:
-                permission_manager.log(
-                    "permission.granted",
-                    tool=tool_name,
-                    permission=",".join(permissions),
-                    principal=decision.principal,
-                    source=decision.source,
-                    run_id=run_id,
-                )
-            return {
-                "allowed": True,
-                "permission": {
-                    "permissions": permissions,
-                    "principal": decision.principal,
-                    "source": decision.source,
-                },
-            }
-        if not decision.needs_confirmation:
+
+        # 只记录：即使权限被标记 Deny 或原本需要确认，也不阻止执行
+        if permissions:
             permission_manager.log(
-                "permission.denied",
+                "permission.granted",
                 tool=tool_name,
-                permission=decision.permission,
+                permission=",".join(permissions),
                 principal=decision.principal,
                 source=decision.source,
+                mode=policy.mode if policy is not None else "",
                 run_id=run_id,
             )
-            return {
-                "allowed": False,
-                "permission": decision.to_dict(),
-                "message": decision.reason,
-            }
 
-        # 高风险权限：先交给前端确认，再阻塞等待结果
-        request = permission_manager.create_request(
-            permission=decision.permission,
-            principals=principals,
-            run_id=run_id,
-            tool_name=tool_name,
-            detail=_describe_action(tool_name, arguments),
-        )
         return {
-            "allowed": False,
-            "needs_confirmation": True,
-            "request": request,
+            "allowed": True,
             "permission": {
                 "permissions": permissions,
                 "principal": decision.principal,
                 "source": decision.source,
             },
+            "security": security,
         }
 
     tools_schema = registry.schemas()
+    loop_guard = LoopGuard()
 
-    for step in range(1, MAX_AGENT_STEPS + 1):
+    # Unlimited Execution：没有固定步数上限，只在任务完成、取消、错误、
+    # Loop Detection 或运行时限制下退出。
+    step = 0
+    while True:
+        step += 1
         if _cancelled():
-            yield {"type": "cancelled", "step": step, "max_steps": MAX_AGENT_STEPS}
+            yield {"type": "cancelled", "step": step}
             return
-        yield {"type": "thinking", "step": step, "max_steps": MAX_AGENT_STEPS}
+        yield {"type": "thinking", "step": step}
 
         round_tool_calls: list[ToolCall] | None = None
 
@@ -236,7 +285,7 @@ async def run_agent(
                 stream=stream,
             ):
                 if _cancelled():
-                    yield {"type": "cancelled", "step": step, "max_steps": MAX_AGENT_STEPS}
+                    yield {"type": "cancelled", "step": step}
                     return
                 if "delta" in event:
                     yield {"type": "delta", "text": event["delta"]}
@@ -258,7 +307,7 @@ async def run_agent(
             return
 
         if _cancelled():
-            yield {"type": "cancelled", "step": step, "max_steps": MAX_AGENT_STEPS}
+            yield {"type": "cancelled", "step": step}
             return
 
         # ---- 执行工具调用 ----
@@ -277,7 +326,7 @@ async def run_agent(
 
         for tc, call in zip(round_tool_calls, normalized_calls):
             if _cancelled():
-                yield {"type": "cancelled", "step": step, "max_steps": MAX_AGENT_STEPS}
+                yield {"type": "cancelled", "step": step}
                 return
             call_id = str(call["id"])
             yield {
@@ -286,86 +335,135 @@ async def run_agent(
                 "name": tc.name,
                 "status": "running",
                 "step": step,
-                "max_steps": MAX_AGENT_STEPS,
                 "arguments": _display_arguments(tc.arguments),
             }
 
-            # ---- 统一权限判定（Agent → Tool Registry → Permission Manager → Tool）----
-            auth = _evaluate_permission(tc.name, tc.arguments)
-            if auth.get("needs_confirmation"):
-                request = auth["request"]
-                yield {
-                    "type": "permission_request",
-                    "call_id": call_id,
-                    "step": step,
-                    "max_steps": MAX_AGENT_STEPS,
-                    **request.public_dict(),
-                }
-                resolved = await permission_manager.wait(request, cancel_event)
-                if _cancelled():
-                    yield {"type": "cancelled", "step": step, "max_steps": MAX_AGENT_STEPS}
-                    return
-                auth = {
-                    "allowed": resolved.allowed,
-                    "permission": resolved.to_dict(),
-                    "message": resolved.reason,
-                    "user_confirmation": request.decision or "timeout",
-                }
+            # ---- 统一「策略 + 权限」判定 ----
+            # Agent → Tool Registry → Security Policy → Risk Analyzer → Permission
+            display_args = _display_arguments(tc.arguments)
 
-            if not auth.get("allowed", True):
-                message = auth.get("message") or "缺少执行该工具所需的权限。"
+            # Loop Protection：执行前拦截完全相同的连续操作
+            loop_reason = loop_guard.check_call(tc.name, display_args)
+            if loop_reason:
+                exhausted = loop_guard.record_detection()
                 yield {
                     "type": "tool_call",
                     "id": call_id,
                     "name": tc.name,
                     "status": "error",
                     "step": step,
-                    "max_steps": MAX_AGENT_STEPS,
-                    "error": message,
-                    "permission": auth.get("permission"),
-                    "permission_result": "denied",
-                    "user_confirmation": auth.get("user_confirmation"),
+                    "error": f"LOOP_DETECTED: {loop_reason}",
+                    "code": "LOOP_DETECTED",
+                    "loop_detected": True,
                 }
                 context.add_tool_result(
                     call_id,
-                    f"[工具执行失败] {message}",
+                    f"[LOOP_DETECTED] {loop_reason} "
+                    "请停止重复相同操作，换一种方式重新规划后再试。",
                     pair_id=pair_id,
                 )
+                yield {
+                    "type": "loop_detected",
+                    "code": "LOOP_DETECTED",
+                    "reason": loop_reason,
+                    "tool": tc.name,
+                    "step": step,
+                    "detections": loop_guard.detections,
+                }
+                if exhausted:
+                    yield {
+                        "type": "error",
+                        "code": "LOOP_DETECTED",
+                        "error_type": "loop",
+                        "message": (
+                            "LOOP_DETECTED：检测到重复操作且无法恢复，"
+                            f"Agent 已停止（{loop_reason}）"
+                        ),
+                    }
+                    return
                 continue
 
-            # Agent Loop 已在本层完成判定，Registry 不再重复询问用户
+            auth = _evaluate_permission(tc.name, display_args)
+            security = auth.get("security")
+
+            # Agent Loop 只记录判定结果，Registry 直接执行，不询问用户
             result = await registry.execute(
                 tc.name, tc.arguments, run_id=run_id, pre_authorized=True
             )
 
+            metadata = dict(result.metadata or {})
+            # Loop Protection：相同错误连续出现
+            result_loop = loop_guard.check_result(tc.name, result.ok, result.error)
             yield {
                 "type": "tool_call",
                 "id": call_id,
                 "name": tc.name,
                 "status": "done" if result.ok else "error",
                 "step": step,
-                "max_steps": MAX_AGENT_STEPS,
                 "duration_ms": round(result.duration_ms, 1),
                 "output": _display_output(result.output),
                 "error": result.error if not result.ok else None,
                 "permission": auth.get("permission"),
                 "permission_result": "granted",
-                "user_confirmation": auth.get("user_confirmation"),
+                "user_confirmation": "auto",
+                "security": security,
+                "metadata": metadata,
+                **(
+                    {"code": "LOOP_DETECTED", "loop_detected": True}
+                    if result_loop
+                    else {}
+                ),
             }
 
-            context.add_tool_result(
-                call_id,
-                result.to_observation(),
-                pair_id=pair_id,
-            )
+            # 命令执行的审计事实（脱敏后写入安全日志）
+            if (
+                permission_manager is not None
+                and isinstance(security, dict)
+                and security.get("kind") == "command"
+            ):
+                permission_manager.log(
+                    "command.executed" if result.ok else "command.failed",
+                    tool=tc.name,
+                    command=security.get("command") or "",
+                    cwd=str(metadata.get("cwd") or security.get("cwd") or ""),
+                    mode=str(security.get("mode") or ""),
+                    risk=str(security.get("risk") or ""),
+                    reason=str(security.get("reason") or ""),
+                    confirmation_required=bool(security.get("requires_confirmation")),
+                    user_decision=auth.get("user_confirmation") or "auto",
+                    exit_code=metadata.get("exit_code"),
+                    timed_out=bool(metadata.get("timed_out")),
+                    run_id=run_id,
+                )
+
+            observation = result.to_observation()
+            if result_loop:
+                observation += (
+                    f"\n\n[LOOP_DETECTED] {result_loop} "
+                    "请停止重复相同操作，换一种方式重新规划后再试。"
+                )
+            context.add_tool_result(call_id, observation, pair_id=pair_id)
+
+            if result_loop:
+                exhausted = loop_guard.record_detection()
+                yield {
+                    "type": "loop_detected",
+                    "code": "LOOP_DETECTED",
+                    "reason": result_loop,
+                    "tool": tc.name,
+                    "step": step,
+                    "detections": loop_guard.detections,
+                }
+                if exhausted:
+                    yield {
+                        "type": "error",
+                        "code": "LOOP_DETECTED",
+                        "error_type": "loop",
+                        "message": (
+                            "LOOP_DETECTED：检测到重复操作且无法恢复，"
+                            f"Agent 已停止（{result_loop}）"
+                        ),
+                    }
+                    return
 
         # 继续下一轮，让模型基于工具结果生成回答
-
-    # 达到最大步数
-    yield {
-        "type": "max_steps",
-        "message": f"已达到最大执行步数（{MAX_AGENT_STEPS}），Agent 已停止。",
-        "steps": MAX_AGENT_STEPS,
-        "max_steps": MAX_AGENT_STEPS,
-    }
-    yield {"type": "done", "steps": MAX_AGENT_STEPS}

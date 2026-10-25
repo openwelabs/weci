@@ -1,8 +1,9 @@
 """PluginContext 的 Core 实现。
 
 插件拿到的是这个对象（但只看到 ``sdk.context.PluginContext`` 接口）。
-所有受权限保护的能力在调用前检查插件是否声明了对应权限；文件与命令
-额外经过 Workspace 安全边界与命令脱敏审计。
+文件与命令操作不再做 WeCi 层面的路径 / 权限拦截：路径原样交给操作系统，
+错误在操作失败后如实返回并记录审计。插件 manifest 的能力声明仍会校验，
+它描述的是插件与 Core 的契约，而不是对用户操作的拦截。
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from backend.services.memory import (
     resolve_scope_id,
 )
 from backend.services.permissions import redact, sanitize_env
-from backend.services.workspace import WorkspaceGuard, WorkspaceSecurityError
+from backend.services.workspace import WorkspaceGuard
 
 
 class PluginContextImpl(PluginContext):
@@ -58,7 +59,7 @@ class PluginContextImpl(PluginContext):
         self._http_client = http_client
         self._logger = logging.getLogger(f"weci.plugin.{plugin_id}")
         self._storage_cache: dict[str, Any] | None = None
-        # Workspace 安全边界：所有文件操作都被限制在 Root 之内
+        # Workspace 只作为默认工作目录，不再限制访问范围
         self._workspace = workspace_guard or WorkspaceGuard()
         # 统一权限层（可选）：用于记录删除等高风险安全事件
         self._permission_manager = permission_manager
@@ -271,6 +272,18 @@ class PluginContextImpl(PluginContext):
         ]
 
     # ---- 进程（需 command:execute 权限）----
+    def _resolve_workdir(self, cwd: str | None) -> Path:
+        """解析命令工作目录：默认 Workspace Root，相对路径相对 Root。
+
+        绝对路径 / ``..`` / 符号链接按操作系统语义直接展开，不做范围限制。
+        """
+        base = self._workspace.root
+        raw = str(cwd).strip() if cwd else ""
+        candidate = Path(raw).expanduser() if raw else base
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        return candidate.resolve(strict=False)
+
     async def run_command(
         self,
         command: str | list[str],
@@ -281,15 +294,8 @@ class PluginContextImpl(PluginContext):
     ) -> dict[str, Any]:
         self._require("command:execute", "context.run_command")
 
-        # 工作目录必须落在 Workspace 内，不能用 cwd 绕出 Root
-        workdir = self._workspace.resolve(
-            cwd or ".", permission="command:execute"
-        )
-        if not workdir.is_dir():
-            raise WorkspaceSecurityError(
-                "命令的工作目录不在 Workspace 内或不存在，已被拒绝。",
-                permission="command:execute",
-            )
+        # 任意 cwd 都直接交给操作系统；目录不存在等错误由 subprocess 抛出
+        workdir = self._resolve_workdir(cwd)
 
         # 不把 API Key / Token / Cookie 等注入命令环境
         env = sanitize_env()
@@ -362,7 +368,7 @@ class PluginContextImpl(PluginContext):
             )
         return result
 
-    # ---- 文件系统（Workspace 安全边界）----
+    # ---- 文件系统（路径不做 WeCi 层面的范围限制）----
     def read_file(self, path: str) -> str:
         self._require("workspace:read", "context.read_file")
         target = self._workspace.for_read(path)

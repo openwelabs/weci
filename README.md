@@ -79,13 +79,14 @@ panels. Conversation history lives in your browser; the model service is yours
 
 **Permissions & security**
 
-- One **Permission Manager** guards every tool call: built-in tools, plugin tools and MCP tools all go through `Tool Registry → Permission Manager`
+- One **Permission Manager** records every tool call: built-in tools, plugin tools and MCP tools share the same audit trail
 - Scoped permissions: `workspace:read` / `workspace:write` / `workspace:delete` / `command:execute` / `network:access` / `memory:read` / `memory:write` / `mcp:use` / `plugin:use`
-- **Default deny + least privilege**: low-risk permissions are auto-allowed, medium / high-risk actions require your confirmation
-- Agent prompts show "Agent requests to run …" with **Allow once / Allow for this Run / Deny**
-- Workspace sandbox rejects `../` escapes and any path outside the Workspace root; read / write / delete are separate permissions
-- `run_command` is pinned to the Workspace, sanitizes the environment, supports timeout and cancellation, and records command, exit code, stdout and stderr
-- A dedicated Permissions page shows Workspace, Providers, Plugins, MCP servers, tool permissions and a redacted security log, with Allow / Deny / Reset
+- **WeCi never intercepts**: Permission Manager and Security Policy only record state; they do not block tool execution
+- **Three recording modes**: Safe (records "would require review") / Auto Review (records safe / dangerous) / Risky (default: records as unrestricted). Switching modes does not change execution
+- Command risk is decided by a structured parser (`shlex` tokens + pipelines / redirects / `sh -c`): `echo "rm -rf"` is not treated as a deletion, while `rm -rf ./build` is
+- **No Workspace path limits**: absolute paths, `..`, symlinks and paths outside Workspace go straight to the OS; file tools and `run_command` are never rejected for their path
+- `run_command` sanitizes the environment, supports timeout and cancellation, and records command / cwd / mode / risk / reason / exit code
+- A dedicated Permissions page shows Workspace, Providers, Plugins, MCP servers, tool permissions and a redacted security log; Allow / Deny are recorded preferences only
 - The security log never contains API keys, tokens, passwords, cookies or authorization headers
 
 **UI**
@@ -102,15 +103,16 @@ The top bar has a **Chat / Agent** switch; each chat remembers its own mode.
 
 - **Chat**: plain conversation. The model's reply streams back via SSE with no tool calls.
 - **Agent**: the model may call registered tools. The backend runs an
-  [Agent Loop](#agent-loop), feeds tool results back to the model, and repeats
-  up to `MAX_AGENT_STEPS` (default 10) to prevent runaway loops.
+  [Agent Loop](#agent-loop), feeds tool results back to the model, and keeps going
+  until the task is done. There is no max step count; runaway behaviour is bounded
+  by user Stop, tool timeouts, Loop Detection and Context Management.
 
 In Agent mode the UI renders an **Agent execution trace** above the reply. It only
 shows what actually happened — never the model's hidden chain-of-thought:
 
-- **Run status**: `Step N / 10 · running` while executing, `Completed · N steps` when done,
-  `Reached step limit (10)`, or `Stopped` after cancel / interruption.
-- **Tool cards**: status icon (spinner / success / failure / interrupted), tool name, step,
+- **Run status**: `N tool calls · Running...` while executing, `N tool calls · 2m 31s` when done,
+  `N tool calls · Stopped` after cancel / interruption. No fake max step is shown.
+- **Tool cards**: status icon (spinner / success / failure / interrupted), tool name,
   status and duration; failures show the error reason directly.
 - **Arguments & results**: collapsed by default, expandable per tool card. Long output
   (over 20k characters) is truncated and scrolls inside the card.
@@ -231,7 +233,7 @@ weci/
 │   │   ├── memory.py           # Memory store: scopes, limits, JSON persistence
 │   │   ├── message.py          # Message / image / file models + OpenAI-compatible conversion
 │   │   ├── openai_client.py    # OpenAI-compatible client (streaming tool-call parsing)
-│   │   ├── agent.py            # Agent Loop: MAX_AGENT_STEPS, tool orchestration, SSE
+│   │   ├── agent.py            # Agent Loop: unlimited execution, loop guard, SSE
 │   │   └── sse.py              # SSE event encoding
 │   ├── plugins/                # Plugin system core
 │   │   ├── manifest.py         # manifest.json loading & validation
@@ -477,10 +479,17 @@ write assistant tool_calls + tool results back to the ContextManager
    ↓
 build() a compressed Context and send it to the model again (back to "model reasons")
    ↓
-steps ≥ MAX_AGENT_STEPS? → emit max_steps event and stop
+until the task completes / user Stop / provider error / loop detected / context full
 ```
 
-`MAX_AGENT_STEPS = 10` (edit at the top of `agent.py`). Each step is one model call.
+The Agent runs with **Unlimited Execution** by default: there is no max step
+count. Steps, tool-call count and duration are statistics only, never stop
+conditions. The real boundaries are user Stop + Security Policy + Tool Timeout +
+Loop Detection + Context Manager.
+
+Loop Protection detects consecutive identical Tool + arguments (3 by default) and
+consecutive identical errors. It returns a structured `LOOP_DETECTED` error so the
+model can replan; repeated detections in one Run end it with `error_type=loop`.
 
 ## MCP (Model Context Protocol)
 

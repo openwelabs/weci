@@ -77,7 +77,7 @@ def test_invalid_transition_completed_to_running(manager):
 def test_tool_call_recording(manager):
     run = _create(manager)
     manager.start(run.id)
-    manager.set_step(run.id, step=1, max_steps=10)
+    manager.set_step(run.id, step=1)
     assert run.current_step == 1
 
     manager.add_tool_call(
@@ -224,9 +224,9 @@ def test_max_runs_per_conversation_trims(manager):
 
 
 def test_persistence_recovery(manager):
-    run = _create(manager, model="gpt-test", provider_id="p1", max_steps=7)
+    run = _create(manager, model="gpt-test", provider_id="p1")
     manager.start(run.id)
-    manager.set_step(run.id, step=2, max_steps=7)
+    manager.set_step(run.id, step=2)
     manager.add_tool_call(run.id, call_id="t1", name="calc", step=2, arguments={"x": 1})
     manager.complete_tool_call(run.id, "t1", output="2", duration_ms=1.2)
     manager.complete(run.id, result="done", steps=2)
@@ -237,7 +237,7 @@ def test_persistence_recovery(manager):
     assert restored.status == "completed"
     assert restored.model == "gpt-test"
     assert restored.provider_id == "p1"
-    assert restored.max_steps == 7
+    assert not hasattr(restored, "max_steps")
     assert restored.steps == 2
     assert restored.result == "done"
     assert len(restored.tool_calls) == 1

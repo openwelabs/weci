@@ -56,7 +56,7 @@ class Settings:
     """运行期配置，来源于环境变量。"""
 
     app_name: str = "WeCi"
-    version: str = "0.14.0"
+    version: str = "0.16.0"
 
     host: str = _env("WECI_HOST", "127.0.0.1")
     port: int = _env_int("WECI_PORT", 8000)
@@ -112,8 +112,12 @@ class Settings:
     mcp_connect_timeout: float = _env_float("WECI_MCP_CONNECT_TIMEOUT", 20.0)
     mcp_call_timeout: float = _env_float("WECI_MCP_CALL_TIMEOUT", 120.0)
 
-    # Workspace 安全边界：所有文件读写都必须落在这个 Root 之内
+    # Workspace 仅作为默认工作目录与上下文信息，不是文件系统沙箱。
+    # 文件工具与 run_command 不做任何路径范围限制，权限由操作系统决定。
     workspace_root: str = _env("WECI_WORKSPACE_ROOT", str(PROJECT_DIR))
+    # Agent 安全模式：safe / auto_review / risky（默认 risky）。
+    # 三种模式都只记录判定状态，不阻止任何工具或命令执行。
+    security_mode: str = _env("WECI_SECURITY_MODE", "risky")
     # 权限确认等待上限（秒）；超时按默认拒绝处理
     permission_confirm_timeout: float = _env_float("WECI_PERMISSION_CONFIRM_TIMEOUT", 120.0)
     # 命令执行的默认超时与输出保留上限

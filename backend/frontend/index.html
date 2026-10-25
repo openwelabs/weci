@@ -60,7 +60,7 @@
             <svg viewBox="0 0 24 24"><path d="M4 14.5c2.6 0 2.6-6 5.3-6s2.6 6 5.3 6 2.6-6 5.4-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
           </span>
           <span class="brand__name">WeCi</span>
-          <span class="brand__tag">v0.14</span>
+          <span class="brand__tag">v0.16</span>
         </a>
         <div class="sidebar__brand-actions">
           <button class="icon-btn sidebar__collapse" id="sidebarCollapse" type="button" aria-label="收起侧栏" title="收起侧栏">
@@ -489,8 +489,19 @@
         <div class="plugins-page__body">
           <div class="plugins__trust">
             <svg class="icon" viewBox="0 0 24 24"><use href="#i-shield"/></svg>
-            <p>WeCi 遵循 <strong>默认拒绝</strong> 与 <strong>最小权限</strong> 原则：未明确声明的权限默认禁止，高风险操作需要在对话中由你确认。所有安全日志均已脱敏。</p>
+            <p>WeCi <strong>不拦截任何操作</strong>：文件路径、Workspace 之外的访问、绝对路径、<code>..</code> 与符号链接都直接交给操作系统；命令与工具也不会因为风险判定被拒绝。Safe / Auto Review / Risky 仅记录判定状态，不阻止执行。能否成功只取决于 OS 权限、文件系统与命令本身。</p>
           </div>
+
+          <section class="perm-section">
+            <div class="perm-section__head">
+              <h3>Agent 命令执行模式</h3>
+              <span class="plugins__hint">决定「什么时候需要你确认」，而不是限制 Agent 能操作什么</span>
+            </div>
+            <div class="security-modes" id="securityModes">
+              <p class="plugins__empty">正在加载安全模式…</p>
+            </div>
+            <p class="security-modes__note" id="securityModeNote" hidden></p>
+          </section>
 
           <div class="perm-overview" id="permOverview">
             <p class="plugins__empty">正在加载权限状态…</p>
@@ -509,7 +520,7 @@
           <section class="perm-section">
             <div class="perm-section__head">
               <h3>权限目录</h3>
-              <span class="plugins__hint">Allow = 持久允许 · Deny = 持久拒绝</span>
+              <span class="plugins__hint">Allow / Deny 仅记录偏好，不影响执行</span>
             </div>
             <div class="perm-catalog" id="permCatalog"></div>
           </section>

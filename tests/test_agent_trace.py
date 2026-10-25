@@ -2,13 +2,16 @@
 
 覆盖：
 - 工具调用参数 / 输出 / 耗时 / 步骤随事件推送
+- Unlimited Execution：不设最大步数，可远超 10 / 50 / 100 次 Tool Call
+- Loop Protection：连续相同调用 / 连续相同错误 → LOOP_DETECTED
 - running → done / error 状态流转
 - 超长工具输出截断
-- 达到最大步数时的事件序列
 - 工具失败原因透传
 """
 
 from __future__ import annotations
+
+import asyncio
 
 import backend.services.agent as agent_module
 from backend.services.context import ContextManager
@@ -48,9 +51,8 @@ def _provider(rounds: list[list[dict]]) -> object:
     return fake_stream
 
 
-def _run(monkeypatch, rounds, registry, max_steps: int = 10):
+def _run(monkeypatch, rounds, registry, cancel_event=None):
     monkeypatch.setattr(agent_module, "stream_chat_with_tools", _provider(rounds))
-    monkeypatch.setattr(agent_module, "MAX_AGENT_STEPS", max_steps)
     context = ContextManager.from_openai_messages(
         [{"role": "user", "content": "hi"}],
         system_prompt=agent_module.AGENT_SYSTEM_PROMPT,
@@ -66,13 +68,16 @@ def _run(monkeypatch, rounds, registry, max_steps: int = 10):
             temperature=0.7,
             max_tokens=None,
             registry=registry,
+            cancel_event=cancel_event,
         ):
             events.append(event)
         return events
 
-    import asyncio
-
     return asyncio.run(collect())
+
+
+def _tool_round(call_id: str, name: str = "noop", arguments: str = "{}") -> list[dict]:
+    return [{"tool_calls": [ToolCall(id=call_id, name=name, arguments=arguments)]}]
 
 
 def test_tool_call_events_include_arguments_output_and_steps(monkeypatch) -> None:
@@ -103,12 +108,13 @@ def test_tool_call_events_include_arguments_output_and_steps(monkeypatch) -> Non
     assert types == ["thinking", "tool_call", "tool_call", "thinking", "delta", "done"]
 
     thinking = events[0]
-    assert thinking["step"] == 1 and thinking["max_steps"] == 10
+    assert thinking["step"] == 1
+    assert "max_steps" not in thinking
 
     running = events[1]
     assert running["status"] == "running"
     assert running["step"] == 1
-    assert running["max_steps"] == 10
+    assert "max_steps" not in running
     assert running["arguments"] == {"path": "README.md"}
 
     done = events[2]
@@ -129,12 +135,14 @@ def test_tool_error_event_exposes_reason(monkeypatch) -> None:
         }
     )
     rounds = [
-        [{"tool_calls": [ToolCall(id="c2", name="run_command", arguments="{}")]}],
+        _tool_round("c2", "run_command"),
         [{"delta": "工具失败了"}],
     ]
 
     events = _run(monkeypatch, rounds, registry)
-    finished = [e for e in events if e.get("type") == "tool_call" and e["status"] != "running"][0]
+    finished = [
+        e for e in events if e.get("type") == "tool_call" and e["status"] != "running"
+    ][0]
     assert finished["status"] == "error"
     assert finished["error"] == "命令不存在"
     assert finished["output"] == ""
@@ -145,10 +153,7 @@ def test_long_tool_output_is_truncated(monkeypatch) -> None:
     registry = FakeRegistry(
         {"big": ToolExecutionResult(ok=True, output="x" * 30, duration_ms=1)}
     )
-    rounds = [
-        [{"tool_calls": [ToolCall(id="c3", name="big", arguments="{}")]}],
-        [{"delta": "ok"}],
-    ]
+    rounds = [_tool_round("c3", "big"), [{"delta": "ok"}]]
 
     events = _run(monkeypatch, rounds, registry)
     done = [e for e in events if e.get("type") == "tool_call" and e["status"] == "done"][0]
@@ -159,35 +164,130 @@ def test_long_tool_output_is_truncated(monkeypatch) -> None:
 def test_invalid_arguments_json_is_passed_through(monkeypatch) -> None:
     registry = FakeRegistry()
     rounds = [
-        [{"tool_calls": [ToolCall(id="c4", name="noop", arguments="not-json")]}],
+        _tool_round("c4", "noop", "not-json"),
         [{"delta": "ok"}],
     ]
 
     events = _run(monkeypatch, rounds, registry)
-    running = [e for e in events if e.get("type") == "tool_call" and e["status"] == "running"][0]
+    running = [
+        e for e in events if e.get("type") == "tool_call" and e["status"] == "running"
+    ][0]
     assert running["arguments"] == "not-json"
 
 
-def test_max_steps_event_sequence(monkeypatch) -> None:
+def _unlimited_rounds(count: int) -> list[list[dict]]:
+    """生成 count 次互不相同的工具调用，用于验证不存在固定步数上限。"""
+    rounds = [
+        _tool_round(f"call-{i}", "noop", f'{{"i": {i}}}') for i in range(count)
+    ]
+    rounds.append([{"delta": "全部完成"}])
+    return rounds
+
+
+def test_agent_can_exceed_ten_tool_calls(monkeypatch) -> None:
     registry = FakeRegistry()
+    events = _run(monkeypatch, _unlimited_rounds(12), registry)
+    assert len(registry.calls) == 12
+    assert [e["type"] for e in events].count("tool_call") == 24
+    assert events[-1] == {"type": "done", "steps": 13}
 
-    def tool_round(call_id: str):
-        return [{"tool_calls": [ToolCall(id=call_id, name="noop", arguments="{}")]}]
 
-    rounds = [tool_round("a"), tool_round("b")]
-    events = _run(monkeypatch, rounds, registry, max_steps=2)
+def test_agent_can_exceed_fifty_tool_calls(monkeypatch) -> None:
+    registry = FakeRegistry()
+    events = _run(monkeypatch, _unlimited_rounds(55), registry)
+    assert len(registry.calls) == 55
+    assert events[-1] == {"type": "done", "steps": 56}
+    assert all(e.get("error_type") != "loop" for e in events)
 
-    assert [e["type"] for e in events].count("tool_call") == 4
-    assert events[-2]["type"] == "max_steps"
-    assert events[-2]["steps"] == 2
-    assert events[-1] == {"type": "done", "steps": 2}
+
+def test_agent_can_exceed_hundred_tool_calls(monkeypatch) -> None:
+    registry = FakeRegistry()
+    events = _run(monkeypatch, _unlimited_rounds(120), registry)
+    assert len(registry.calls) == 120
+    assert events[-1] == {"type": "done", "steps": 121}
+
+
+def test_repeated_identical_call_triggers_loop_detection(monkeypatch) -> None:
+    """连续相同 Tool + 相同参数：第 3 次拦截并返回 LOOP_DETECTED。"""
+    registry = FakeRegistry()
+    rounds = [_tool_round(f"same-{i}") for i in range(3)]
+    rounds.append([{"delta": "换一种方式"}])
+
+    events = _run(monkeypatch, rounds, registry)
+    # 前两次正常执行，第三次被 Loop Protection 拦截
+    assert len(registry.calls) == 2
+
+    loop_events = [e for e in events if e["type"] == "loop_detected"]
+    assert len(loop_events) == 1
+    assert loop_events[0]["code"] == "LOOP_DETECTED"
+    assert loop_events[0]["detections"] == 1
+
+    blocked = [
+        e
+        for e in events
+        if e.get("type") == "tool_call" and e.get("code") == "LOOP_DETECTED"
+    ]
+    assert blocked and blocked[0]["status"] == "error"
+    assert blocked[0]["error"].startswith("LOOP_DETECTED")
+    # 触发后仍让模型继续，最终正常结束
+    assert events[-1]["type"] == "done"
+
+
+def test_repeated_identical_call_ends_run_when_unrecoverable(monkeypatch) -> None:
+    """同一次 Run 内重复检测达到上限：结构化错误结束 Run。"""
+    registry = FakeRegistry()
+    rounds = [_tool_round(f"same-{i}") for i in range(4)]
+
+    events = _run(monkeypatch, rounds, registry)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["error_type"] == "loop"
+    assert events[-1]["code"] == "LOOP_DETECTED"
+    assert "LOOP_DETECTED" in events[-1]["message"]
+
+
+def test_repeated_identical_error_triggers_loop_detection(monkeypatch) -> None:
+    registry = FakeRegistry(
+        {
+            "run_command": ToolExecutionResult(
+                ok=False, output="", error="命令不存在", duration_ms=1
+            )
+        }
+    )
+    # 参数各不相同（绕开相同调用检测），但错误完全相同
+    rounds = [
+        _tool_round(f"cmd-{i}", "run_command", f'{{"command": "cmd-{i}"}}')
+        for i in range(3)
+    ]
+    rounds.append([{"delta": "换一种方式"}])
+
+    events = _run(monkeypatch, rounds, registry)
+    loop_events = [e for e in events if e["type"] == "loop_detected"]
+    assert len(loop_events) == 1
+    assert "相同错误" in loop_events[0]["reason"]
+    assert events[-1]["type"] == "done"
+
+
+def test_cancel_stops_before_next_tool(monkeypatch) -> None:
+    """取消后不再启动新的 Tool，事件以 cancelled 结束。"""
+    registry = FakeRegistry()
+    cancel_event = asyncio.Event()
+    cancel_event.set()
+
+    events = _run(
+        monkeypatch,
+        [_tool_round("c1"), [{"delta": "不会执行"}]],
+        registry,
+        cancel_event=cancel_event,
+    )
+    assert events[0]["type"] == "cancelled"
+    assert registry.calls == []
 
 
 def test_no_tool_call_keeps_chat_like_flow(monkeypatch) -> None:
     registry = FakeRegistry()
     events = _run(monkeypatch, [[{"delta": "直接回答"}]], registry)
     assert events == [
-        {"type": "thinking", "step": 1, "max_steps": 10},
+        {"type": "thinking", "step": 1},
         {"type": "delta", "text": "直接回答"},
         {"type": "done", "steps": 1},
     ]

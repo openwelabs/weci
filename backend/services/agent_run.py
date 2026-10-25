@@ -53,7 +53,9 @@ MAX_RUNS_PER_CONVERSATION = 100
 # Run 中保存的工具输出上限（公开响应进一步截断，内部仍可保留）
 MAX_RUN_TOOL_OUTPUT_CHARS = 200_000
 MAX_RUN_RESULT_CHARS = 200_000
-MAX_RUN_EVENTS = 500  # 避免单个 Run 的事件日志无限增长
+# 避免单个 Run 的事件日志无限增长；Unlimited Execution 下一次长 Run 可能
+# 执行上百次工具调用，这里留出足够空间让完整过程可回溯。
+MAX_RUN_EVENTS = 2_000
 
 # 错误分类（UI 友好，不暴露敏感信息）
 ERROR_TYPES = (
@@ -64,6 +66,7 @@ ERROR_TYPES = (
     "context",
     "cancelled",
     "network",
+    "loop",
     "unknown",
 )
 
@@ -98,7 +101,16 @@ class ToolCallRecord:
     # 权限审计：工具声明 / 实际使用的权限、判定结果与用户确认方式
     permissions: list[str] = field(default_factory=list)
     permission_result: str | None = None  # granted / denied / not_required
-    user_confirmation: str | None = None  # once / run / deny / timeout
+    user_confirmation: str | None = None  # once / run / deny / timeout / auto
+    # 命令执行审计（Security Policy Manager）
+    security_mode: str | None = None  # safe / auto_review / risky
+    risk: str | None = None  # safe / dangerous
+    risk_reason: str | None = None
+    confirmation_required: bool | None = None
+    command: str | None = None
+    cwd: str | None = None
+    exit_code: int | None = None
+    timed_out: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -132,7 +144,6 @@ class AgentRun:
     started_at: str
     finished_at: str | None = None
     current_step: int = 0
-    max_steps: int = 10
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     result: str = ""
     error: str | None = None
@@ -157,7 +168,6 @@ class AgentRun:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "current_step": self.current_step,
-            "max_steps": self.max_steps,
             "tool_calls": [tc.to_dict() for tc in self.tool_calls],
             "result": _truncate(self.result, MAX_RUN_RESULT_CHARS),
             "error": self.error,
@@ -211,7 +221,6 @@ class AgentRun:
             started_at=raw.get("started_at") or _now_iso(),
             finished_at=raw.get("finished_at"),
             current_step=int(raw.get("current_step") or 0),
-            max_steps=int(raw.get("max_steps") or 10),
             tool_calls=tool_calls,
             result=str(raw.get("result") or ""),
             error=raw.get("error"),
@@ -270,7 +279,6 @@ class AgentRunManager:
         model: str = "",
         provider_id: str = "",
         mode: str = "agent",
-        max_steps: int = 10,
     ) -> AgentRun:
         run = AgentRun(
             id=f"run-{uuid.uuid4().hex[:12]}",
@@ -280,7 +288,6 @@ class AgentRunManager:
             model=model,
             provider_id=provider_id,
             mode=mode,
-            max_steps=max_steps,
         )
         run.add_event("run.created", model=model, provider_id=provider_id, mode=mode)
         with self._lock:
@@ -305,13 +312,11 @@ class AgentRunManager:
         self._persist()
         return True
 
-    def set_step(self, run_id: str, step: int, max_steps: int | None = None) -> None:
+    def set_step(self, run_id: str, step: int) -> None:
         run = self.get(run_id)
         if run is None:
             return
         run.current_step = int(step)
-        if max_steps is not None:
-            run.max_steps = int(max_steps)
         run.add_event("step.started", step=run.current_step)
         self._persist()
 
@@ -378,6 +383,11 @@ class AgentRunManager:
         tool: str,
         permission: str,
         detail: str = "",
+        kind: str = "permission",
+        risk: str = "",
+        reason: str = "",
+        command: str = "",
+        mode: str = "",
     ) -> None:
         """用户确认请求已下发前端。"""
         run = self.get(run_id)
@@ -389,6 +399,70 @@ class AgentRunManager:
             tool=tool,
             permission=permission,
             detail=detail,
+            kind=kind,
+            risk=risk,
+            reason=reason,
+            command=command,
+            mode=mode,
+        )
+        self._persist()
+
+    def record_tool_security(
+        self,
+        run_id: str,
+        call_id: str,
+        *,
+        security: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        user_decision: str | None = None,
+    ) -> None:
+        """记录一次工具 / 命令的安全策略判定与执行事实，供 Run History 审计。
+
+        ``security`` 来自 Security Policy Manager 的判定结果（mode / risk /
+        reason / command / cwd / requires_confirmation）；``metadata`` 来自
+        ToolResult（exit_code / cwd / timed_out）。两者都不包含 API Key。
+        """
+        run = self.get(run_id)
+        if run is None:
+            return
+        tc = next((c for c in run.tool_calls if c.id == str(call_id)), None)
+        if tc is None:
+            return
+        security = security if isinstance(security, dict) else {}
+        metadata = metadata if isinstance(metadata, dict) else {}
+        if not security and not metadata and not user_decision:
+            # 没有策略判定、命令执行事实或用户决策时不制造噪音事件
+            return
+        if security:
+            tc.security_mode = str(security.get("mode") or "") or None
+            tc.risk = str(security.get("risk") or "") or None
+            tc.risk_reason = str(security.get("reason") or "") or None
+            tc.confirmation_required = bool(security.get("requires_confirmation"))
+            if security.get("command"):
+                tc.command = str(security.get("command"))
+        if metadata.get("command") and not tc.command:
+            tc.command = str(metadata.get("command"))
+        if metadata.get("cwd") or security.get("cwd"):
+            tc.cwd = str(metadata.get("cwd") or security.get("cwd"))
+        exit_code = metadata.get("exit_code")
+        if isinstance(exit_code, int):
+            tc.exit_code = exit_code
+        if "timed_out" in metadata:
+            tc.timed_out = bool(metadata.get("timed_out"))
+        if user_decision:
+            tc.user_confirmation = user_decision
+        run.add_event(
+            "tool.security",
+            id=call_id,
+            name=tc.name,
+            mode=tc.security_mode,
+            risk=tc.risk,
+            reason=tc.risk_reason,
+            confirmation_required=tc.confirmation_required,
+            user_decision=user_decision,
+            command=tc.command,
+            cwd=tc.cwd,
+            exit_code=tc.exit_code,
         )
         self._persist()
 

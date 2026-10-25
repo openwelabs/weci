@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.config import settings
-from backend.services.agent import AGENT_SYSTEM_PROMPT, MAX_AGENT_STEPS, run_agent
+from backend.services.agent import AGENT_SYSTEM_PROMPT, run_agent
 from backend.services.agent_run import AgentRunManager
 from backend.services.context import ContextManager, WorkspaceContext
 from backend.services.memory import (
@@ -179,6 +179,8 @@ async def chat(
     )
     # 统一权限层：所有工具（内置 / 插件 / MCP）都经它判定
     permission_manager = getattr(request.app.state, "permission_manager", None)
+    # 命令 / 工具安全策略层（Safe / Auto Review / Risky）
+    security_policy = getattr(request.app.state, "security_policy", None)
 
     async def event_stream() -> AsyncIterator[str]:
         # Memory scope 仅在本次请求内有效，供 Agent 工具读写当前用户的记忆
@@ -194,7 +196,6 @@ async def chat(
                     model=model,
                     provider_id=resolved.provider_id if resolved is not None else "",
                     mode="agent",
-                    max_steps=MAX_AGENT_STEPS,
                 )
                 run_manager.start(run.id)
                 cancel_event = run_manager.cancel_event(run.id)
@@ -237,6 +238,7 @@ async def chat(
                         stream=use_stream,
                         cancel_event=cancel_event,
                         permission_manager=permission_manager,
+                        security_policy=security_policy,
                         run_id=run.id if run is not None else "",
                     )
                     accumulated = ""
@@ -249,7 +251,6 @@ async def chat(
                                     run_manager.set_step(
                                         run.id,
                                         int(event.get("step") or 0),
-                                        int(event["max_steps"]) if "max_steps" in event else None,
                                     )
                                 elif etype == "tool_call":
                                     call_id = str(event.get("id") or "")
@@ -271,6 +272,13 @@ async def chat(
                                             ),
                                             user_confirmation=event.get("user_confirmation"),
                                         )
+                                        run_manager.record_tool_security(
+                                            run.id,
+                                            call_id,
+                                            security=event.get("security"),
+                                            metadata=event.get("metadata"),
+                                            user_decision=event.get("user_confirmation"),
+                                        )
                                         run_manager.complete_tool_call(
                                             run.id,
                                             call_id,
@@ -290,6 +298,13 @@ async def chat(
                                                 event="permission.denied",
                                                 detail=str(event.get("error") or ""),
                                             )
+                                        run_manager.record_tool_security(
+                                            run.id,
+                                            call_id,
+                                            security=event.get("security"),
+                                            metadata=event.get("metadata"),
+                                            user_decision=event.get("user_confirmation"),
+                                        )
                                         run_manager.fail_tool_call(
                                             run.id,
                                             call_id,
@@ -303,6 +318,11 @@ async def chat(
                                         tool=str(event.get("tool") or ""),
                                         permission=str(event.get("permission") or ""),
                                         detail=str(event.get("title") or ""),
+                                        kind=str(event.get("kind") or "permission"),
+                                        risk=str(event.get("risk") or ""),
+                                        reason=str(event.get("reason") or ""),
+                                        command=str(event.get("command") or ""),
+                                        mode=str(event.get("mode") or ""),
                                     )
                                 elif etype == "delta":
                                     text = event.get("text")
@@ -315,18 +335,11 @@ async def chat(
                                         result=accumulated,
                                         steps=int(event.get("steps") or 0),
                                     )
-                                elif etype == "max_steps":
-                                    note = event.get("message") or "已达到最大执行步数。"
-                                    run_manager.complete(
-                                        run.id,
-                                        result=f"{accumulated}\n\n{note}",
-                                        steps=int(event.get("steps") or MAX_AGENT_STEPS),
-                                    )
                                 elif etype == "error":
                                     run_manager.fail(
                                         run.id,
                                         error=event.get("message") or "Agent 执行失败",
-                                        error_type="provider",
+                                        error_type=str(event.get("error_type") or "provider"),
                                     )
                                 elif etype == "cancelled":
                                     if run.status != "cancelled":
